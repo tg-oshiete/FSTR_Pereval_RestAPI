@@ -8,7 +8,7 @@ class UserCreate(BaseModel):
     phone: Optional[str] = None
     fam: str = Field(..., min_length=1)
     name: str = Field(..., min_length=1)
-    orc: Optional[str] = None
+    otc: Optional[str] = None
 
 
 class CoordsCreate(BaseModel):

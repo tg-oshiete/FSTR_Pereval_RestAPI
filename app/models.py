@@ -1,7 +1,7 @@
 from sqlalchemy import Column, Integer, String, Float, DateTime, ForeignKey, CheckConstraint, LargeBinary
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
-from app.database import Base
+from database import Base
 
 class User(Base):
     __tablename__ = "users"
@@ -49,7 +49,7 @@ class PerevalAdded(Base):
         CheckConstraint(
             "status IN ('new', 'pending', 'accepted', 'rejected')",
             name="check_status_values"
-        )
+        ),
     )
 
     user = relationship("User", back_populates="perevals")
