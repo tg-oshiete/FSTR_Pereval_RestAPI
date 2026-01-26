@@ -39,3 +39,15 @@ class PerevalCreate(BaseModel):
     coords: CoordsCreate
     level: LevelCreate
     images: List[ImageCreate] = []
+
+
+class SubmitResponse(BaseModel):
+    status: int = 200
+    message: str = "Отправлено успешно"
+    id: int
+
+
+class ErrorResponse(BaseModel):
+    status: int
+    message: str
+    detail: Optional[str] = None
