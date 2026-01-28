@@ -2,7 +2,7 @@ from fastapi import FastAPI, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from database import get_db, engine
 from models import Base
-from schemas import PerevalCreate, SubmitResponse, ErrorResponse
+from schemas import PerevalCreate, SubmitResponse, ErrorResponse, PerevalResponse
 from crud import PerevalRepository
 
 
@@ -45,3 +45,17 @@ def submit_data(pereval: PerevalCreate, db: Session = Depends(get_db)):
                                 "message": "Внутренняя ошибка сервера",
                                 "detail": str(e)
                             })
+
+@app.get("/submitData/{pereval_id}", response_model=PerevalResponse)
+def get_detail_data(pereval_id: int, db: Session = Depends(get_db)):
+    return PerevalRepository.get_pereval_or_404(db, pereval_id)
+
+
+@app.patch("/submitData/")
+def update_data():
+    pass
+
+
+@app.get("/submitData/")
+def get_email_data(email: str):
+    pass
