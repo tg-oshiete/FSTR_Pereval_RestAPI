@@ -51,8 +51,8 @@ def get_detail_data(pereval_id: int, db: Session = Depends(get_db)):
     return PerevalRepository.get_pereval_or_404(db, pereval_id)
 
 
-@app.patch("/submitData/")
-def update_data(pereval_id :int, update_data: dict, db: Session = Depends(get_db)):
+@app.patch("/submitData/{pereval_id}")
+def update_data(pereval_id :int, update_data: dict,  db: Session = Depends(get_db)):
 # для улучшения можно создать pydantic модель для update_data и автоматизировать update_pereval
     return PerevalRepository.update_pereval(db, pereval_id, update_data)
 
