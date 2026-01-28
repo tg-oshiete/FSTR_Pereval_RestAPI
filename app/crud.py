@@ -1,13 +1,13 @@
-from sqlalchemy.orm import Session
-from schemas import PerevalCreate
+from sqlalchemy.orm import Session, joinedload
+from schemas import PerevalCreate, PerevalResponse
 from models import PerevalAdded, User, Coords, Image, PerevalImages
 import base64
+from fastapi import HTTPException
 
 
 class PerevalRepository:
     @staticmethod
     def create_pereval(db:Session, pereval_data: PerevalCreate) -> PerevalAdded:
-
         user = db.query(User).filter(User.email == pereval_data.user.email).first()
 
         if not user:
@@ -69,3 +69,59 @@ class PerevalRepository:
         db.refresh(pereval)
 
         return pereval
+
+
+    @staticmethod
+    def get_pereval_or_404(db:Session, pereval_id:int) -> PerevalAdded:
+        pereval = db.query(PerevalAdded).options(
+            joinedload(PerevalAdded.user),
+            joinedload(PerevalAdded.user),
+            joinedload(PerevalAdded.coords),
+            joinedload(PerevalAdded.images)
+        ).filter(PerevalAdded.id == pereval_id).first()
+        if not pereval:
+            raise HTTPException(status_code=404, detail="Pereval not found")
+
+        images_data = []
+        for image in pereval.images:
+            try:
+                img_base64 = base64.b64encode(image.img).decode("utf-8")
+            except:
+                img_base64 = ""
+
+            images_data.append({
+                "img": img_base64,
+                "title": image.title
+            })
+
+        response_data = {
+            "id": pereval.id,
+            "status": pereval.status,
+            "date_added": pereval.date_added,
+            "beauty_title": pereval.beauty_title,
+            "title": pereval.title,
+            "other_titles": pereval.other_titles,
+            "connect": pereval.connect,
+            "add_time": pereval.add_time,
+            "user": {
+                "email": pereval.user.email,
+                "phone": pereval.user.phone,
+                "fam": pereval.user.fam,
+                "name": pereval.user.name,
+                "otc": pereval.user.otc
+            },
+            "coords": {
+                "latitude": pereval.coords.latitude,
+                "longitude": pereval.coords.longitude,
+                "height": pereval.coords.height
+            },
+            "level": {
+                "spring": pereval.level_spring,
+                "summer": pereval.level_summer,
+                "autumn": pereval.level_autumn,
+                "winter": pereval.level_winter
+            },
+            "images": images_data
+        }
+
+        return PerevalResponse(**response_data)

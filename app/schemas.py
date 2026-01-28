@@ -51,3 +51,11 @@ class ErrorResponse(BaseModel):
     status: int
     message: str
     detail: Optional[str] = None
+
+
+class PerevalResponse(PerevalCreate):
+    status: str
+    date_added: datetime
+
+    class Config:
+        from_attributes = True
