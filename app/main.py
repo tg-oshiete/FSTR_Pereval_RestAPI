@@ -52,10 +52,11 @@ def get_detail_data(pereval_id: int, db: Session = Depends(get_db)):
 
 
 @app.patch("/submitData/")
-def update_data():
-    pass
+def update_data(pereval_id :int, update_data: dict, db: Session = Depends(get_db)):
+# для улучшения можно создать pydantic модель для update_data и автоматизировать update_pereval
+    return PerevalRepository.update_pereval(db, pereval_id, update_data)
 
 
 @app.get("/submitData/")
-def get_email_data(email: str):
+def get_email_data(email: str, db: Session = Depends(get_db)):
     pass
