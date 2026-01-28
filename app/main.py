@@ -58,5 +58,5 @@ def update_data(pereval_id :int, update_data: dict,  db: Session = Depends(get_d
 
 
 @app.get("/submitData/")
-def get_email_data(email: str, db: Session = Depends(get_db)):
-    pass
+def get_email_data(user__email: str, db: Session = Depends(get_db)):
+    return PerevalRepository.get_perevals_by_email(db, user__email)
