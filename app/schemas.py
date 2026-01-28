@@ -59,3 +59,17 @@ class PerevalResponse(PerevalCreate):
 
     class Config:
         from_attributes = True
+
+
+class PerevalList(BaseModel):
+    id: int
+    title: str
+    status: str
+    date_added: datetime
+    user_email: str
+    latitude: float
+    longitude: float
+    height: int
+
+    class Config:
+        orm_mode = True

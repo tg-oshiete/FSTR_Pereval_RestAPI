@@ -189,3 +189,30 @@ class PerevalRepository:
             db.rollback()
             return {"state": 0, "message":f"Ошибка: {e}"}
 
+    @staticmethod
+    def get_perevals_by_email(db: Session, email:str) -> list:
+        user = db.query(User).filter(User.email == email).first()
+        if not user:
+            return []
+
+        perevals = db.query(PerevalAdded).options(
+            joinedload(PerevalAdded.user),
+            joinedload(PerevalAdded.coords),
+            joinedload(PerevalAdded.images),
+        ).filter(PerevalAdded.user_id == user.id).all()
+
+        result = []
+
+        for pereval in perevals:
+            result.append({
+                "id": pereval.id,
+                "title": pereval.title,
+                "status": pereval.status,
+                "date_added": pereval.date_added,
+                "user_email": pereval.user.email,
+                "latitude": pereval.coords.latitude,
+                "longitude": pereval.coords.longitude,
+                "height": pereval.coords.height
+            })
+
+        return result
