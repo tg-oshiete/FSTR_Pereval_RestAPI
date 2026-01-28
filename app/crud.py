@@ -125,3 +125,67 @@ class PerevalRepository:
         }
 
         return PerevalResponse(**response_data)
+
+    @staticmethod
+    def update_pereval(db: Session, pereval_id:int, update_data:dict) -> dict:
+        pereval = db.query(PerevalAdded).filter(PerevalAdded.id == pereval_id).first()
+
+        if not pereval:
+            return {"state": 0, "message": "Перевал не найден"}
+
+        if pereval.status != "new":
+            return {"status": 0, "message": f"Статус записи {pereval.status}. Редактирование невозможно"}
+
+        try:
+            if "coords" in update_data:
+                coords = db.query(Coords).filter(Coords.id == pereval.coord_id).first()
+                if coords:
+                    coords.latitude = update_data["coords"].get("latitude", coords.latitude)
+                    coords.longitude = update_data["coords"].get("longitude", coords.longitude)
+                    coords.height = update_data["coords"].get("height", coords.height)
+
+            if "title" in update_data:
+                pereval.title = update_data["title"]
+
+            if "beauty_title" in update_data:
+                pereval.beauty_title = update_data["beauty_title"]
+
+            if "other_titles" in update_data:
+                pereval.other_titles = update_data["other_titles"]
+
+            if "connect" in update_data:
+                pereval.connect = update_data["connect"]
+
+            if "add_time" in update_data:
+                pereval.add_time = update_data["add_time"]
+
+            if "level" in update_data:
+                level = update_data["level"]
+                if "sptring" in level:
+                    pereval.level_sprint = level["spring"]
+                if "summer" in level:
+                    pereval.level_summer = level["summer"]
+                if "winter" in level:
+                    pereval.level_sprint = level["winter"]
+                if "autumn" in level:
+                    pereval.level_summer = level["autumn"]
+
+            if "images" in update_data:
+                db.query(PerevalImages).filter(PerevalImages.id_pereval == pereval_id).delete()
+
+                for img_data in update_data['images']:
+                    img_bytes = base64.b64decode(img_data['img'])
+                    image = Image(img=img_bytes, title=img_data['title'])
+                    db.add(image)
+                    db.flush()
+
+                    link = PerevalImages(id_pereval=pereval_id, id_image=image.id)
+                    db.add(link)
+
+            db.commit()
+            return {"state": 1, "message": "Обновлено"}
+
+        except Exception as e:
+            db.rollback()
+            return {"state": 0, "message":f"Ошибка: {e}"}
+
