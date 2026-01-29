@@ -2,8 +2,10 @@ from fastapi import FastAPI, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from database import get_db, engine
 from models import Base
-from schemas import PerevalCreate, SubmitResponse, ErrorResponse, PerevalResponse
+from schemas import (PerevalCreate, SubmitResponse, ErrorResponse, PerevalResponse, PerevalList, PerevalUpdate,
+                     UpdateResponse)
 from crud import PerevalRepository
+from typing import List
 
 
 
@@ -30,33 +32,54 @@ def submit_data(pereval: PerevalCreate, db: Session = Depends(get_db)):
         )
 
     except ValueError as e:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
-                            detail={
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail={
                                 "status":400,
                                 "message": "Некорректные данные",
-                                "detail": str(e)
-                            }
-        )
+                                "detail": str(e)})
 
     except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                            detail={
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail={
                                 "status":500,
                                 "message": "Внутренняя ошибка сервера",
-                                "detail": str(e)
-                            })
+                                "detail": str(e)})
+
 
 @app.get("/submitData/{pereval_id}", response_model=PerevalResponse)
 def get_detail_data(pereval_id: int, db: Session = Depends(get_db)):
     return PerevalRepository.get_pereval_or_404(db, pereval_id)
 
 
-@app.patch("/submitData/{pereval_id}")
-def update_data(pereval_id :int, update_data: dict,  db: Session = Depends(get_db)):
-# для улучшения можно создать pydantic модель для update_data и автоматизировать update_pereval
-    return PerevalRepository.update_pereval(db, pereval_id, update_data)
+@app.patch("/submitData/{pereval_id}", response_model=UpdateResponse,
+           responses={
+               400: {"model": ErrorResponse, "description": "Некорректные данные"},
+               404: {"model": ErrorResponse, "description": "Перевал не найден"}
+           })
+def update_data(pereval_id :int, update_data: PerevalUpdate,  db: Session = Depends(get_db)):
+    try:
+        result = PerevalRepository.update_pereval(db, pereval_id, update_data)
+
+        if result["state"] == 0:
+            raise HTTPException(
+                status_code=status.HTTP_204_NO_CONTENT,
+                detail={
+                    "status": 400,
+                    "message": result["message"]
+                }
+            )
+
+        return UpdateResponse(**result)
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                            detail={
+                                "status": 500,
+                                "message": "Внутренняя ошибка сервера",
+                                "detail": str(e)
+                            })
 
 
-@app.get("/submitData/")
+@app.get("/submitData/", response_model=List[PerevalList])
 def get_email_data(user__email: str, db: Session = Depends(get_db)):
     return PerevalRepository.get_perevals_by_email(db, user__email)
