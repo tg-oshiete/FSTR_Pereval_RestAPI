@@ -80,7 +80,7 @@ class PerevalRepository:
             joinedload(PerevalAdded.images)
         ).filter(PerevalAdded.id == pereval_id).first()
         if not pereval:
-            raise HTTPException(status_code=404, detail="Pereval not found")
+            raise HTTPException(status_code=404, detail="Перевал не найден")
 
         images_data = []
         for image in pereval.images:
