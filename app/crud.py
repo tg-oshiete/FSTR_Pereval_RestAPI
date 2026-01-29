@@ -1,5 +1,5 @@
 from sqlalchemy.orm import Session, joinedload
-from schemas import PerevalCreate, PerevalResponse
+from schemas import PerevalCreate, PerevalResponse, PerevalUpdate
 from models import PerevalAdded, User, Coords, Image, PerevalImages
 import base64
 from fastapi import HTTPException
@@ -127,55 +127,64 @@ class PerevalRepository:
         return PerevalResponse(**response_data)
 
     @staticmethod
-    def update_pereval(db: Session, pereval_id:int, update_data:dict) -> dict:
+    def update_pereval(db: Session, pereval_id:int, update_data:PerevalUpdate) -> dict:
         pereval = db.query(PerevalAdded).filter(PerevalAdded.id == pereval_id).first()
 
         if not pereval:
-            return {"state": 0, "message": "Перевал не найден"}
+            raise HTTPException(status_code=404, detail="Перевал не найден")
 
         if pereval.status != "new":
             return {"status": 0, "message": f"Статус записи {pereval.status}. Редактирование невозможно"}
 
         try:
-            if "coords" in update_data:
+            update_dict = update_data.model_dump(exclude_none=True)
+            if "coords" in update_dict:
                 coords = db.query(Coords).filter(Coords.id == pereval.coord_id).first()
                 if coords:
-                    coords.latitude = update_data["coords"].get("latitude", coords.latitude)
-                    coords.longitude = update_data["coords"].get("longitude", coords.longitude)
-                    coords.height = update_data["coords"].get("height", coords.height)
+                    coords_data = update_dict["coords"]
+                    coords.latitude = coords_data.get("latitude", coords.latitude)
+                    coords.longitude = coords_data.get("longitude", coords.longitude)
+                    coords.height = coords_data.get("height", coords.height)
 
-            if "title" in update_data:
-                pereval.title = update_data["title"]
+            if "title" in update_dict:
+                pereval.title = update_dict["title"]
+            if "beauty_title" in update_dict:
+                pereval.beauty_title = update_dict["beauty_title"]
+            if "other_titles" in update_dict:
+                pereval.other_titles = update_dict["other_titles"]
+            if "connect" in update_dict:
+                pereval.connect = update_dict["connect"]
+            if "add_time" in update_dict:
+                pereval.add_time = update_dict["add_time"]
 
-            if "beauty_title" in update_data:
-                pereval.beauty_title = update_data["beauty_title"]
-
-            if "other_titles" in update_data:
-                pereval.other_titles = update_data["other_titles"]
-
-            if "connect" in update_data:
-                pereval.connect = update_data["connect"]
-
-            if "add_time" in update_data:
-                pereval.add_time = update_data["add_time"]
-
-            if "level" in update_data:
-                level = update_data["level"]
-                if "sptring" in level:
+            if "level" in update_dict:
+                level = update_dict["level"]
+                if "spring" in level:
                     pereval.level_sprint = level["spring"]
                 if "summer" in level:
                     pereval.level_summer = level["summer"]
                 if "winter" in level:
-                    pereval.level_sprint = level["winter"]
+                    pereval.level_winter = level["winter"]
                 if "autumn" in level:
-                    pereval.level_summer = level["autumn"]
+                    pereval.level_autumn = level["autumn"]
 
-            if "images" in update_data:
+            if "images" in update_dict:
                 db.query(PerevalImages).filter(PerevalImages.id_pereval == pereval_id).delete()
 
-                for img_data in update_data['images']:
-                    img_bytes = base64.b64decode(img_data['img'])
-                    image = Image(img=img_bytes, title=img_data['title'])
+                old_images = db.query(Image).join(PerevalImages).filter(
+                    PerevalImages.id_pereval == pereval_id).all()
+
+                for old_img in old_images:
+                    db.delete(old_img)
+
+                for img_data in update_dict["images"]:
+                    try:
+                        img_bytes = base64.b64decode(img_data["img"])
+                    except Exception as e:
+                        db.rollback()
+                        return {"state": 0, "message": f"Ошибка декодирования изображения: {str(e)}"}
+
+                    image = Image(img=img_bytes, title=img_data["title"])
                     db.add(image)
                     db.flush()
 

@@ -72,4 +72,23 @@ class PerevalList(BaseModel):
     height: int
 
     class Config:
-        orm_mode = True
+        from_attributes = True
+
+
+class PerevalUpdate(BaseModel):
+    beauty_title: Optional[str] = None
+    title: Optional[str] = None
+    other_titles: Optional[str] = None
+    connect: Optional[str] = None
+    add_time: Optional[datetime] = None
+    coords: Optional[CoordsCreate] = None
+    level: Optional[LevelCreate] = None
+    images: Optional[List[ImageCreate]] = None
+
+    class Config:
+        extra = "forbid"
+
+
+class UpdateResponse(BaseModel):
+    state: int
+    message: str
