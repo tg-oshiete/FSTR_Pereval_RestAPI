@@ -1,4 +1,4 @@
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, EmailStr, Field, ConfigDict
 from typing import Optional, List
 from datetime import datetime
 
@@ -54,11 +54,11 @@ class ErrorResponse(BaseModel):
 
 
 class PerevalResponse(PerevalCreate):
+    id: int
     status: str
     date_added: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class PerevalList(BaseModel):
@@ -71,8 +71,7 @@ class PerevalList(BaseModel):
     longitude: float
     height: int
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class PerevalUpdate(BaseModel):
@@ -85,8 +84,7 @@ class PerevalUpdate(BaseModel):
     level: Optional[LevelCreate] = None
     images: Optional[List[ImageCreate]] = None
 
-    class Config:
-        extra = "forbid"
+    model_config = ConfigDict(extra="forbid")
 
 
 class UpdateResponse(BaseModel):

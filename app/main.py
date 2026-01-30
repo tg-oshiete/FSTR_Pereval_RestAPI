@@ -1,10 +1,10 @@
 from fastapi import FastAPI, Depends, HTTPException, status
 from sqlalchemy.orm import Session
-from database import get_db, engine
-from models import Base
-from schemas import (PerevalCreate, SubmitResponse, ErrorResponse, PerevalResponse, PerevalList, PerevalUpdate,
+from app.database import get_db, engine
+from app.models import Base
+from app.schemas import (PerevalCreate, SubmitResponse, ErrorResponse, PerevalResponse, PerevalList, PerevalUpdate,
                      UpdateResponse)
-from crud import PerevalRepository
+from app.crud import PerevalRepository
 from typing import List
 
 
