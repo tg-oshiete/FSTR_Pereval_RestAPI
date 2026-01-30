@@ -1,6 +1,6 @@
 from sqlalchemy.orm import Session, joinedload
-from schemas import PerevalCreate, PerevalResponse, PerevalUpdate
-from models import PerevalAdded, User, Coords, Image, PerevalImages
+from app.schemas import PerevalCreate, PerevalResponse, PerevalUpdate
+from app.models import PerevalAdded, User, Coords, Image, PerevalImages
 import base64
 from fastapi import HTTPException
 
