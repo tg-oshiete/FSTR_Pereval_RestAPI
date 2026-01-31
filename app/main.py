@@ -11,7 +11,25 @@ from typing import List
 
 Base.metadata.create_all(bind=engine)
 
-app = FastAPI(title="FSTR Pereval API", version="1.0", description="API для работы с горными перевалами")
+app = FastAPI(title="FSTR Pereval API", version="1.0",
+              description="""
+    REST API для управления информацией о горных перевалах.
+    
+    Возможности:
+    
+    - Добавление новых перевалов
+    - Получение информации о перевалах
+    - Обновление данных перевалов
+    - Фильтрация перевалов по пользователю
+    - Модерация записей (статусы: new, pending, accepted, rejected)
+    
+    Статусы модерации:
+    
+    1. new - новая запись (ожидает модерации)
+    2. pending - на модерации
+    3. accepted - одобрено
+    4. rejected - отклонено
+    """)
 
 @app.post(
     "/submitData/",
@@ -60,6 +78,7 @@ def submit_data(pereval: PerevalCreate, db: Session = Depends(get_db)):
 
 @app.get("/submitData/{pereval_id}", response_model=PerevalResponse,
          response_description="Полная информация о перевале",
+         summary="Получить перевал по ID",
          responses={404:{"model": ErrorResponse, "description": "Перевал не найден"}})
 def get_detail_data(pereval_id: int, db: Session = Depends(get_db)):
     """
