@@ -25,9 +25,12 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.config import Settings
+from app.access import get_auth_db
+from app.cli import issue_token
 from app.database import Base, build_engine, get_db
 from app.main import create_app
 from app.models import Image, PerevalAdded, PerevalImages
+from app.security import Role
 from app.validation import DEFAULT_LIMITS
 
 
@@ -63,7 +66,11 @@ def check(engine, settings):
             yield session
 
     app.dependency_overrides[get_db] = database
+    app.dependency_overrides[get_auth_db] = database
+    with Session(engine) as session:
+        legacy = issue_token(session, email="legacy@example.com", role=Role.AUTHOR)
     with TestClient(app) as client:
+        client.headers["Authorization"] = "Bearer " + legacy["token"]
         assert client.patch("/submitData/1", json={"images": []}).status_code == 200
         assert len(client.get("/submitData/2").json()["images"]) == 1
         with Session(engine) as fresh:
@@ -75,6 +82,9 @@ def check(engine, settings):
                    "coords": {"latitude": 20, "longitude": 80, "height": 3200},
                    "level": {"spring": "н/к"}, "add_time": "2026-10-31T15:00:00+03:00",
                    "images": [{"title": "Photo", "img": PNG}]}
+        with Session(engine) as session:
+            author = issue_token(session, role=Role.AUTHOR, **payload["user"])
+        client.headers["Authorization"] = "Bearer " + author["token"]
         response = client.post("/submitData/", json=payload)
         assert response.status_code == response.json()["status"] == 201, "POST with n/k failed"
         item_id = response.json()["id"]

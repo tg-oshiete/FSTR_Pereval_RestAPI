@@ -8,25 +8,31 @@ from fastapi import APIRouter, Depends, FastAPI, Query
 from fastapi.openapi.utils import get_openapi
 from pydantic import BeforeValidator, Field
 from pydantic_core import PydanticCustomError
+from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 import uvicorn
 
 from app.config import Settings, get_settings
+from app.access import Author, CurrentPrincipal, Moderator
 from app import crud, services
 from app.database import build_engine, get_db
 from app.errors import APIError, install_handlers
 from app.middleware import RequestPolicyMiddleware
+from app.models import PerevalAdded
 from app.schemas import (ErrorResponse, NormalizedEmail, PerevalCreate, PerevalList,
                          PerevalResponse, PerevalUpdate, SubmitResponse, UpdateResponse,
-                         ValidationErrorResponse)
+                         ValidationErrorResponse, HistoryResponse, PerevalStatus,
+                         StatusResponse, StatusUpdate)
+from app.security import AccessDenied, Role, require_owner
 from app.validation import DEFAULT_LIMITS, UploadLimits
 
 
 API_DESCRIPTION = """
 REST API для заявок о горных перевалах. Создание, чтение, частичное изменение
 и фильтрация по email. Содержимое редактируется только в статусе new.
-Статусы: new, pending, accepted, rejected. Авторизация и модераторские маршруты
-запланированы на фазу 4. Правила полей и ошибок: docs/API_CONTRACT.md.
+Все заявки и история частные: необходим Bearer-токен локальной CLI.
+Автор работает со своими заявками; модератор читает очередь и принимает решения.
+Переходы: new → pending → accepted/rejected. Правила: docs/API_CONTRACT.md.
 """
 
 
@@ -41,6 +47,8 @@ def public_id(value):
 
 PublicID = Annotated[int, BeforeValidator(public_id), Field(ge=1, le=2147483647)]
 router = APIRouter(responses={
+    401: {"model": ErrorResponse, "description": "Нужен действительный Bearer-токен; WWW-Authenticate: Bearer"},
+    403: {"model": ErrorResponse, "description": "Недостаточно прав"},
     404: {"model": ErrorResponse, "description": "Заявка или маршрут не найдены"},
     405: {"model": ErrorResponse, "description": "Метод не поддерживается; заголовок Allow"},
     413: {"model": ErrorResponse, "description": "Превышен лимит тела запроса"},
@@ -52,9 +60,9 @@ router = APIRouter(responses={
 @router.post("/submitData/", response_model=SubmitResponse, status_code=201,
              summary="Предложить новый перевал",
              responses={409: {"model": ErrorResponse, "description": "Конфликт данных профиля"}})
-def submit_data(pereval: PerevalCreate, db: Session = Depends(get_db)):
+def submit_data(pereval: PerevalCreate, principal: Author, db: Session = Depends(get_db)):
     try:
-        pereval_id = services.create_pereval(db, pereval)
+        pereval_id = services.create_pereval(db, pereval, principal)
     except services.UserProfileConflict:
         raise APIError("USER_PROFILE_CONFLICT") from None
     return SubmitResponse(id=pereval_id)
@@ -69,10 +77,11 @@ def response_time(db: Session, value):
 
 @router.get("/submitData/{pereval_id}", response_model=PerevalResponse,
             summary="Получить перевал по ID")
-def get_detail_data(pereval_id: PublicID, db: Session = Depends(get_db)):
+def get_detail_data(pereval_id: PublicID, principal: CurrentPrincipal, db: Session = Depends(get_db)):
     pereval = crud.get_pereval(db, pereval_id)
     if pereval is None:
         raise APIError("PEREVAL_NOT_FOUND")
+    require_owner(principal, pereval.user_id)
     return PerevalResponse(
         id=pereval.id, status=pereval.status, date_added=response_time(db, pereval.date_added),
         title=pereval.title, beauty_title=pereval.beauty_title,
@@ -89,7 +98,8 @@ def get_detail_data(pereval_id: PublicID, db: Session = Depends(get_db)):
 @router.patch("/submitData/{pereval_id}", response_model=UpdateResponse,
               summary="Частично изменить перевал в статусе new",
               responses={409: {"model": ErrorResponse, "description": "Заявка уже вышла из статуса new"}})
-def update_data(pereval_id: PublicID, update_data: PerevalUpdate, db: Session = Depends(get_db)):
+def update_data(pereval_id: PublicID, update_data: PerevalUpdate, principal: Author,
+                db: Session = Depends(get_db)):
     """Пропуск сохраняет поле; null очищает только необязательные строки и сезоны.
 
     Координаты и сезоны изменяются по отдельности. images полностью заменяет
@@ -97,7 +107,7 @@ def update_data(pereval_id: PublicID, update_data: PerevalUpdate, db: Session = 
     Пустые PATCH/coords/level запрещены. Ошибка целиком отклоняет изменение.
     """
     try:
-        services.update_pereval(db, pereval_id, update_data)
+        services.update_pereval(db, pereval_id, update_data, principal)
     except services.PerevalNotFound:
         raise APIError("PEREVAL_NOT_FOUND") from None
     except services.PerevalNotEditable:
@@ -108,13 +118,63 @@ def update_data(pereval_id: PublicID, update_data: PerevalUpdate, db: Session = 
 @router.get("/submitData/", response_model=list[PerevalList], summary="Получить перевалы по email")
 def get_email_data(
     user__email: Annotated[NormalizedEmail, Query()],
+    principal: CurrentPrincipal,
     limit: Annotated[int, Query(ge=1, le=100, description="Число заявок, 1–100")] = 20,
     offset: Annotated[int, Query(ge=0, le=2147483647, description="Пропустить N заявок")] = 0,
     db: Session = Depends(get_db),
 ):
     """Массив в порядке id ASC. По умолчанию limit=20, offset=0; фото не загружаются."""
+    if principal.role != Role.MODERATOR and principal.email != user__email:
+        raise AccessDenied()
     return [PerevalList(**{**row, "date_added": response_time(db, row["date_added"])})
             for row in crud.get_perevals_by_email(db, user__email, limit=limit, offset=offset)]
+
+
+@router.get("/moderation/perevals", response_model=list[PerevalList], summary="Очередь модерации")
+def moderation_queue(
+    principal: Moderator,
+    status: Annotated[PerevalStatus, Query()] = "new",
+    limit: Annotated[int, Query(ge=1, le=100)] = 20,
+    offset: Annotated[int, Query(ge=0, le=2147483647)] = 0,
+    db: Session = Depends(get_db),
+):
+    return [PerevalList(**{**row, "date_added": response_time(db, row["date_added"])})
+            for row in crud.moderation_queue(db, status, limit=limit, offset=offset)]
+
+
+@router.patch("/moderation/perevals/{pereval_id}/status", response_model=StatusResponse,
+              summary="Изменить статус с записью решения",
+              responses={409: {"model": ErrorResponse, "description": "Конфликт или запрещённый переход"}})
+def moderate(pereval_id: PublicID, data: StatusUpdate, principal: Moderator,
+             db: Session = Depends(get_db)):
+    try:
+        services.change_status(db, pereval_id, data, principal)
+    except services.PerevalNotFound:
+        raise APIError("PEREVAL_NOT_FOUND") from None
+    except services.StatusConflict:
+        raise APIError("STATUS_CONFLICT") from None
+    except services.InvalidStatusTransition:
+        raise APIError("INVALID_STATUS_TRANSITION") from None
+    return StatusResponse(id=pereval_id, status=data.status)
+
+
+@router.get("/submitData/{pereval_id}/history", response_model=list[HistoryResponse],
+            summary="История решений для автора и модератора")
+def history(
+    pereval_id: PublicID, principal: CurrentPrincipal,
+    limit: Annotated[int, Query(ge=1, le=100)] = 20,
+    offset: Annotated[int, Query(ge=0, le=2147483647)] = 0,
+    db: Session = Depends(get_db),
+):
+    owner_id = db.scalar(select(PerevalAdded.user_id).where(PerevalAdded.id == pereval_id))
+    if owner_id is None:
+        raise APIError("PEREVAL_NOT_FOUND")
+    require_owner(principal, owner_id)
+    return [HistoryResponse(
+        id=row.id, pereval_id=row.pereval_id, old_status=row.old_status, new_status=row.new_status,
+        actor={"user_id": row.actor_user_id, "role": row.actor_role},
+        changed_at=response_time(db, row.changed_at), reason=row.reason,
+    ) for row in crud.get_history(db, pereval_id, limit=limit, offset=offset)]
 
 
 @router.get("/health", tags=["health"])

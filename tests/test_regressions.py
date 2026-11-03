@@ -187,7 +187,8 @@ def test_invalid_base64_and_non_images_rejected_before_writes(client, db, test_p
             assert fresh.get(PerevalAdded, pereval_id).title == before["title"]
             assert fresh.query(Image).one().img == base64.b64decode(before["images"][0]["img"])
         else:
-            assert all(fresh.query(model).count() == 0 for model in (User, Coords, Image, PerevalAdded, PerevalImages))
+            assert fresh.query(User).count() == 1  # Identity provisioned before POST.
+            assert all(fresh.query(model).count() == 0 for model in (Coords, Image, PerevalAdded, PerevalImages))
 
 
 @pytest.mark.parametrize("method", ["post", "patch"])
@@ -228,7 +229,8 @@ def test_database_failure_rolls_back_and_hides_exception(client, db, test_pereva
             assert fresh.query(Image).one().img == base64.b64decode(test_pereval_data["images"][0]["img"])
             assert fresh.query(PerevalImages).count() == 1
         else:
-            assert all(fresh.query(model).count() == 0 for model in (User, Coords, Image, PerevalAdded, PerevalImages))
+            assert fresh.query(User).count() == 1
+            assert all(fresh.query(model).count() == 0 for model in (Coords, Image, PerevalAdded, PerevalImages))
 
 
 def test_router_and_validation_errors_are_safe(client):

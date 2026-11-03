@@ -5,11 +5,11 @@ committed; exceptions, including flush/commit failures, leave no partial write.
 """
 
 from sqlalchemy import exists, select
-from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.models import Coords, Image, PerevalAdded, PerevalImages, User
-from app.schemas import PerevalCreate, PerevalUpdate, UserCreate
+from app.models import Coords, DecisionHistory, Image, PerevalAdded, PerevalImages, User
+from app.schemas import PerevalCreate, PerevalUpdate, StatusUpdate
+from app.security import AccessDenied, Principal, Role, require_owner, require_role
 
 
 class PerevalNotFound(Exception):
@@ -24,24 +24,12 @@ class UserProfileConflict(Exception):
     pass
 
 
-def get_or_create_user(db: Session, profile: UserCreate) -> User:
-    user = db.scalar(select(User).where(User.email == profile.email))
-    if user is None:
-        try:
-            # Only this attempted insert is rolled back on an email collision;
-            # PostgreSQL's outer transaction stays usable after the SAVEPOINT.
-            with db.begin_nested():
-                user = User(**profile.model_dump())
-                db.add(user)
-                db.flush()
-        except IntegrityError:
-            user = db.scalar(select(User).where(User.email == profile.email))
-            if user is None:
-                raise  # Not the expected email collision: preserve the real error.
-    if any(getattr(user, field) != value
-           for field, value in profile.model_dump(exclude_unset=True).items()):
-        raise UserProfileConflict()
-    return user
+class StatusConflict(Exception):
+    pass
+
+
+class InvalidStatusTransition(Exception):
+    pass
 
 
 def add_images(db: Session, pereval_id: int, images) -> None:
@@ -53,9 +41,18 @@ def add_images(db: Session, pereval_id: int, images) -> None:
     db.flush()
 
 
-def create_pereval(db: Session, data: PerevalCreate) -> int:
+def create_pereval(db: Session, data: PerevalCreate, principal: Principal) -> int:
+    require_role(principal, Role.AUTHOR)
+    if data.user.email != principal.email:
+        raise AccessDenied()
     with db.begin():
-        user = get_or_create_user(db, data.user)
+        # Identity is provisioned by CLI, never chosen/created by this request.
+        user = db.get(User, principal.user_id)
+        if user is None or user.email != data.user.email:
+            raise AccessDenied()
+        if any(getattr(user, field) != value
+               for field, value in data.user.model_dump(exclude_unset=True).items()):
+            raise UserProfileConflict()
         coords = Coords(**data.coords.model_dump())
         db.add(coords)
         db.flush()
@@ -71,13 +68,15 @@ def create_pereval(db: Session, data: PerevalCreate) -> int:
     return pereval_id
 
 
-def update_pereval(db: Session, pereval_id: int, data: PerevalUpdate) -> None:
+def update_pereval(db: Session, pereval_id: int, data: PerevalUpdate, principal: Principal) -> None:
+    require_role(principal, Role.AUTHOR)
     with db.begin():
         pereval = db.scalar(select(PerevalAdded).where(
             PerevalAdded.id == pereval_id,
         ).with_for_update())
         if pereval is None:
             raise PerevalNotFound()
+        require_owner(principal, pereval.user_id, moderator_allowed=False)
         if pereval.status != "new":
             raise PerevalNotEditable()
 
@@ -103,4 +102,29 @@ def update_pereval(db: Session, pereval_id: int, data: PerevalUpdate) -> None:
                     ~exists().where(PerevalImages.id_image == Image.id),
                 ).delete(synchronize_session=False)
             add_images(db, pereval_id, data.images)
+        db.flush()
+
+
+TRANSITIONS = {("new", "pending"), ("pending", "accepted"), ("pending", "rejected")}
+
+
+def change_status(db: Session, pereval_id: int, data: StatusUpdate, principal: Principal) -> None:
+    require_role(principal, Role.MODERATOR)
+    with db.begin():
+        # Same row lock as content PATCH. READ COMMITTED rechecks the latest row
+        # after a competing writer commits, before state/ownership are inspected.
+        pereval = db.scalar(select(PerevalAdded).where(
+            PerevalAdded.id == pereval_id,
+        ).with_for_update())
+        if pereval is None:
+            raise PerevalNotFound()
+        if pereval.status != data.expected_status:
+            raise StatusConflict()
+        if (pereval.status, data.status) not in TRANSITIONS:
+            raise InvalidStatusTransition()
+        db.add(DecisionHistory(
+            pereval_id=pereval_id, old_status=pereval.status, new_status=data.status,
+            actor_user_id=principal.user_id, actor_role=principal.role.value, reason=data.reason,
+        ))
+        pereval.status = data.status
         db.flush()

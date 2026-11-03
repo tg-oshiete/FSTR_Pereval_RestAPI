@@ -47,7 +47,7 @@ def test_empty_upgrade_matches_metadata_and_is_repeatable(pg_database):
     migrate(pg_database)
     migrate(pg_database)
     with pg_database.connect() as connection:
-        assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "0003"
+        assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "0004"
         assert compare_metadata(MigrationContext.configure(connection), Base.metadata) == []
         assert int(connection.scalar(text("SHOW server_version_num"))) // 10000 == 18
     migrate(pg_database, "0002", downgrade=True)

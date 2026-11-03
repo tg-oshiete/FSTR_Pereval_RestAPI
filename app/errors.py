@@ -9,10 +9,15 @@ from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException
 
 from app.schemas import ValidationType
+from app.security import AccessDenied
 
 
 logger = logging.getLogger("app.errors")
 ERRORS = {
+    "UNAUTHORIZED": (401, "Требуется действительный Bearer-токен"),
+    "FORBIDDEN": (403, "Недостаточно прав"),
+    "STATUS_CONFLICT": (409, "Текущий статус не совпадает с ожидаемым"),
+    "INVALID_STATUS_TRANSITION": (409, "Недопустимый переход статуса"),
     "PEREVAL_NOT_FOUND": (404, "Перевал не найден"),
     "ROUTE_NOT_FOUND": (404, "Маршрут не найден"),
     "METHOD_NOT_ALLOWED": (405, "Метод не поддерживается"),
@@ -25,6 +30,8 @@ ERRORS = {
 
 def error_response(code: str, *, headers=None) -> JSONResponse:
     status, message = ERRORS[code]
+    if code == "UNAUTHORIZED":
+        headers = {**(headers or {}), "WWW-Authenticate": "Bearer"}
     return JSONResponse(status_code=status, content={"detail": {"code": code, "message": message}},
                         headers=headers)
 
@@ -82,6 +89,10 @@ def validation_response(errors) -> JSONResponse:
 
 
 def install_handlers(application: FastAPI) -> None:
+    @application.exception_handler(AccessDenied)
+    async def forbidden(request: Request, exc: AccessDenied):
+        return error_response("FORBIDDEN")
+
     @application.exception_handler(RequestValidationError)
     async def validation_error(request: Request, exc: RequestValidationError):
         return validation_response(exc.errors())

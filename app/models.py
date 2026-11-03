@@ -70,6 +70,7 @@ class PerevalAdded(Base):
             name="check_status_values"
         ),
         Index("ix_pereval_added_user_id_id", "user_id", "id"),
+        Index("ix_pereval_added_status_id", "status", "id"),
     ) + tuple(text_check(field, maximum) for field, maximum in (
         ("title", 255), ("beauty_title", 255), ("other_titles", 1024), ("connect", 2000),
     )) + tuple(CheckConstraint(
@@ -124,3 +125,44 @@ class SprActivitiesTypes(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     title = Column(String)
+
+
+class AccessToken(Base):
+    __tablename__ = "access_tokens"
+
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    role = Column(String(9), nullable=False)
+    token_hash = Column(String(64), nullable=False, unique=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    expires_at = Column(DateTime(timezone=True), nullable=False)
+    revoked_at = Column(DateTime(timezone=True))
+
+    __table_args__ = (
+        CheckConstraint("role IN ('author', 'moderator')", name="ck_access_token_role"),
+        CheckConstraint("length(token_hash) = 64", name="ck_access_token_hash_length"),
+        CheckConstraint("expires_at > created_at", name="ck_access_token_expiry"),
+    )
+
+
+class DecisionHistory(Base):
+    __tablename__ = "decision_history"
+
+    id = Column(Integer, primary_key=True)
+    pereval_id = Column(Integer, ForeignKey("pereval_added.id"), nullable=False)
+    old_status = Column(String(8), nullable=False)
+    new_status = Column(String(8), nullable=False)
+    actor_user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    actor_role = Column(String(9), nullable=False)
+    changed_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    reason = Column(String(1000))
+
+    __table_args__ = (
+        Index("ix_decision_history_pereval_id_id", "pereval_id", "id"),
+        CheckConstraint("actor_role = 'moderator'", name="ck_decision_actor_role"),
+        CheckConstraint("(old_status = 'new' AND new_status = 'pending') OR "
+                        "(old_status = 'pending' AND new_status IN ('accepted', 'rejected'))",
+                        name="ck_decision_transition"),
+        text_check("reason", 1000),
+        CheckConstraint("new_status != 'rejected' OR reason IS NOT NULL", name="ck_rejection_reason"),
+    )

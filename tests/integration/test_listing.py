@@ -30,8 +30,9 @@ def test_bounded_stable_list_without_photo_queries(pg_client, pg_engine, test_pe
         assert pg_client.get("/submitData/", params={**params, "offset": 2147483647}).json() == []
     finally:
         event.remove(pg_engine, "before_cursor_execute", record)
-    assert len(queries) == 5
-    assert all("images" not in query.lower() and "LIMIT" in query and "ORDER BY pereval_added.id" in query for query in queries)
+    lists = [query for query in queries if "FROM pereval_added" in query]
+    assert len(queries) == 10 and len(lists) == 5  # Auth query plus bounded list.
+    assert all("images" not in query.lower() and "LIMIT" in query and "ORDER BY pereval_added.id" in query for query in lists)
 
 
 @pytest.mark.parametrize("key,value", [("limit", 0), ("limit", 101), ("limit", -1), ("limit", "1.5"),
@@ -53,6 +54,10 @@ def test_openapi_documents_pagination(pg_client):
 
 def test_existing_profile_omitted_fields_and_explicit_conflicts(pg_client, pg_engine, test_pereval_data):
     test_pereval_data["user"].update(phone="123", otc="Тестович")
+    with Session(pg_engine) as operator:
+        user = operator.query(User).one()
+        user.phone, user.otc = "123", "Тестович"
+        operator.commit()
     assert pg_client.post("/submitData/", json=test_pereval_data).status_code == 201
     test_pereval_data["user"].pop("phone")
     test_pereval_data["user"].pop("otc")

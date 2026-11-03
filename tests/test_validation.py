@@ -14,12 +14,22 @@ from PIL.PngImagePlugin import PngInfo
 import pytest
 from sqlalchemy.orm import Session
 
-from app.models import PerevalAdded
+from app.models import PerevalAdded, User
+from app.schemas import UserCreate
 from tests.test_regressions import create, error, photo
 
 
 def limits(test_app, **values):
     test_app.state.settings = test_app.state.settings.model_copy(update=values)
+
+
+def operator_profile(db, profile):
+    # Validation tests provision their chosen profile outside the HTTP API.
+    with Session(db.get_bind()) as operator:
+        user = operator.query(User).one()
+        for field, value in UserCreate.model_validate(profile).model_dump().items():
+            setattr(user, field, value)
+        operator.commit()
 
 
 def send(client, data, method, payload):
@@ -45,8 +55,10 @@ def test_text_length_boundaries(client, test_pereval_data, method, field, bound,
 
 @pytest.mark.parametrize("field,bound", [("fam", 100), ("name", 100), ("otc", 100), ("phone", 32)])
 @pytest.mark.parametrize("delta", [0, 1])
-def test_profile_length_boundaries(client, test_pereval_data, field, bound, delta):
+def test_profile_length_boundaries(client, db, test_pereval_data, field, bound, delta):
     test_pereval_data["user"][field] = "x" * (bound + delta)
+    if not delta:
+        operator_profile(db, test_pereval_data["user"])
     response = client.post("/submitData/", json=test_pereval_data)
     if delta:
         error(response, 422, "VALIDATION_ERROR")
@@ -83,10 +95,11 @@ def test_post_unknown_fields_and_nulls(client, test_pereval_data, mutate):
     error(client.post("/submitData/", json=test_pereval_data), 422, "VALIDATION_ERROR")
 
 
-def test_normalized_values_round_trip(client, test_pereval_data):
+def test_normalized_values_round_trip(client, db, test_pereval_data):
     test_pereval_data.update(title="  Перевал  А  ", connect="Route\n\tApproach",
                              add_time="2026-10-31T15:00:00.123456+03:00")
     test_pereval_data["user"].update(email="  Local.Part@EXAMPLE.COM ", fam=" Иванов ")
+    operator_profile(db, test_pereval_data["user"])
     test_pereval_data["level"] = {"spring": " 1а ", "summer": "2Б", "winter": "Н/К", "autumn": "3b"}
     pereval_id = create(client, test_pereval_data)
     result = client.get(f"/submitData/{pereval_id}")
@@ -247,7 +260,10 @@ def test_request_byte_limit(client, test_app, db, test_pereval_data, delta, stre
 
             scope = {"type": "http", "asgi": {"version": "3.0"}, "http_version": "1.1",
                      "method": method.upper(), "scheme": "http", "path": path, "raw_path": path.encode(),
-                     "root_path": "", "query_string": b"", "headers": [(b"content-type", b"application/json")],
+                     "root_path": "", "query_string": b"", "headers": [
+                         (b"content-type", b"application/json"),
+                         (b"authorization", client.headers["Authorization"].encode("ascii")),
+                     ],
                      "client": ("testclient", 50000), "server": ("testserver", 80)}
             await test_app(scope, receive, transmit)
             return messages
@@ -317,10 +333,12 @@ def test_coordinate_inclusive_bounds_and_integer_round_trip(client, test_pereval
 
 
 @pytest.mark.parametrize("length", [254, 255])
-def test_email_length_boundary_for_post_and_query(client, test_pereval_data, length):
+def test_email_length_boundary_for_post_and_query(client, db, test_pereval_data, length):
     email = "l" * 64 + "@" + "a" * 63 + "." + "b" * 63 + "." + "c" * (length - 197) + ".com"
     assert len(email) == length
     test_pereval_data["user"]["email"] = email
+    if length == 254:
+        operator_profile(db, test_pereval_data["user"])
     post = client.post("/submitData/", json=test_pereval_data)
     query = client.get("/submitData/", params={"user__email": email})
     if length == 254:
@@ -335,6 +353,7 @@ def test_profile_reuse_compares_only_supplied_optional_fields(client, db, test_p
     from app.models import User
 
     test_pereval_data["user"].update(phone="+7 000 000", otc="Отчество")
+    operator_profile(db, test_pereval_data["user"])
     create(client, test_pereval_data)
     del test_pereval_data["user"]["phone"]
     del test_pereval_data["user"]["otc"]

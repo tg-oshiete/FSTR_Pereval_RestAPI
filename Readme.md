@@ -32,3 +32,14 @@ python -m pytest -m integration tests/integration
 Интеграционные тесты требуют Docker и создают одноразовый PostgreSQL.
 Проверяются ограничения, миграции, транзакции и конкурентные запросы.
 Справочник: [контракт API](docs/API_CONTRACT.md). Нагрузочные показатели не измерялись.
+
+## Доступ и модерация
+
+Все прикладные маршруты требуют Bearer-токен. Автор видит свои заявки и изменяет
+только new. Модератор читает очередь, переводит new → pending → accepted/rejected;
+для rejected обязательна причина. История доступна владельцу и модератору.
+
+Оператор выдаёт токен через `python -m app.cli issue --email author@example.com
+--role author --fam Test --name Author --ttl-hours 1` (одна строка).
+Отзыв: `python -m app.cli revoke --token-id <id>`. Не публикуйте выданный секрет.
+Схема обновляется `alembic upgrade head`, включая доступ и историю решений.

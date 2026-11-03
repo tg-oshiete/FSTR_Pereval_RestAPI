@@ -232,8 +232,41 @@ class UpdateResponse(StrictModel):
     message: Literal["Обновлено"] = "Обновлено"
 
 
+class StatusUpdate(StrictModel):
+    expected_status: PerevalStatus
+    status: PerevalStatus
+    reason: text(1000, multiline=True) | None = None
+
+    @model_validator(mode="after")
+    def require_rejection_reason(self):
+        if self.status == "rejected" and self.reason is None:
+            raise PydanticCustomError("invalid_value", "Для отклонения обязательна причина")
+        return self
+
+
+class StatusResponse(StrictModel):
+    id: int = Field(ge=1, le=2147483647)
+    status: PerevalStatus
+
+
+class DecisionActor(StrictModel):
+    user_id: int = Field(ge=1, le=2147483647)
+    role: Literal["moderator"]
+
+
+class HistoryResponse(StrictModel):
+    id: int = Field(ge=1, le=2147483647)
+    pereval_id: int = Field(ge=1, le=2147483647)
+    old_status: PerevalStatus
+    new_status: PerevalStatus
+    actor: DecisionActor
+    changed_at: UTCTimestamp
+    reason: text(1000, multiline=True) | None
+
+
 ErrorCode = Literal["PEREVAL_NOT_FOUND", "ROUTE_NOT_FOUND", "METHOD_NOT_ALLOWED",
-                    "PEREVAL_NOT_EDITABLE", "USER_PROFILE_CONFLICT", "PAYLOAD_TOO_LARGE", "INTERNAL_ERROR"]
+                    "PEREVAL_NOT_EDITABLE", "USER_PROFILE_CONFLICT", "PAYLOAD_TOO_LARGE", "INTERNAL_ERROR",
+                    "UNAUTHORIZED", "FORBIDDEN", "STATUS_CONFLICT", "INVALID_STATUS_TRANSITION"]
 ValidationType = Literal[
     "missing", "extra_forbidden", "string_type", "string_too_short", "string_too_long", "string_controls",
     "int_type", "float_type", "finite_number", "greater_than_equal", "less_than_equal", "list_type",

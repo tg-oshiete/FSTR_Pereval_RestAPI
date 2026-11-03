@@ -17,9 +17,12 @@ from sqlalchemy.engine import URL
 from sqlalchemy.orm import Session
 
 from app.config import Settings
+from app.access import get_auth_db
 from app.database import get_db
 from app.main import create_app
 from app.validation import DEFAULT_LIMITS
+from tests.auth_helpers import provision
+from app.security import Role
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -95,7 +98,21 @@ def pg_engine(pg_database):
 
 
 @pytest.fixture
-def pg_client(pg_engine):
+def pg_identity(pg_engine, test_pereval_data):
+    return provision(pg_engine, test_pereval_data["user"])
+
+
+@pytest.fixture
+def actors(pg_engine, pg_identity):
+    return {
+        "a": pg_identity,
+        "b": provision(pg_engine, {"email": "other@example.com", "fam": "Other", "name": "Author"}),
+        "m": provision(pg_engine, {"email": "mod@example.com", "fam": "Test", "name": "Moderator"}, Role.MODERATOR),
+    }
+
+
+@pytest.fixture
+def pg_client(pg_engine, pg_identity):
     url = pg_engine.url
     settings = Settings(_env_file=None, db_host=url.host, db_port=url.port, db_name=url.database,
                         db_login=url.username, db_pass=url.password, PORT=8000, **asdict(DEFAULT_LIMITS))
@@ -106,8 +123,10 @@ def pg_client(pg_engine):
             yield session
 
     app.dependency_overrides[get_db] = database
+    app.dependency_overrides[get_auth_db] = database
     try:
         with TestClient(app) as client:
+            client.headers.update(pg_identity["headers"])
             yield client
     finally:
         app.dependency_overrides.clear()

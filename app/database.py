@@ -15,8 +15,8 @@ Base = declarative_base()
 
 def build_engine(settings: Settings) -> Engine:
     return create_engine(
-        # Email collision recovery re-SELECTs the winning row after SAVEPOINT
-        # rollback. Each statement must see the latest committed snapshot.
+        # A waiting FOR UPDATE must see the competing writer's committed row
+        # before checking expected_status or whether content remains editable.
         settings.database_url, pool_pre_ping=True, hide_parameters=True,
         isolation_level="READ COMMITTED",
     )

@@ -24,6 +24,7 @@ def main():
     project = "fstr-compose-" + secrets.token_hex(5)
     volume = project + "_postgres18_data"
     password = secrets.token_urlsafe(24) + "@:/#?%$"
+    issued_secrets = []
     env = {k: v for k, v in os.environ.items() if not k.startswith(("FSTR_", "COMPOSE_")) and k != "PORT"}
     with socket.socket() as sock:
         sock.bind(("127.0.0.1", 0))
@@ -31,6 +32,8 @@ def main():
 
     def redact(output):
         output = output.replace(password, "[REDACTED]")
+        for token in issued_secrets:
+            output = output.replace(token, "[REDACTED TOKEN]")
         return re.sub(r"postgres(?:ql)?(?:\+\w+)?://\S+", "[REDACTED DSN]", output)
 
     def run(args, *, check=True):
@@ -55,9 +58,12 @@ def main():
         def compose(*args):
             return run([*prefix, *args])
 
+        authorization = {}
+
         def request(path, data=None):
             body = json.dumps(data).encode() if data is not None else None
-            req = urllib.request.Request(f"http://127.0.0.1:{port}{path}", data=body, headers={"Content-Type": "application/json"})
+            req = urllib.request.Request(f"http://127.0.0.1:{port}{path}", data=body,
+                                         headers={"Content-Type": "application/json", **authorization})
             with urllib.request.urlopen(req, timeout=5) as response:
                 return response.status, response.read()
 
@@ -87,6 +93,12 @@ def main():
             assert pgdata == "/var/lib/postgresql/18/docker"
             print("Migration, repeat upgrade, model/schema comparison, health/docs and PG18 mount: OK", flush=True)
 
+            issued = json.loads(compose("exec", "-T", "app", "python", "-m", "app.cli", "issue",
+                                        "--email", "smoke@example.com", "--role", "author",
+                                        "--fam", "Test", "--name", "Test").stdout)
+            issued_secrets.append(issued["token"])
+            authorization["Authorization"] = "Bearer " + issued["token"]
+
             status, body = request("/submitData/", {
                 "title": "Persistence test",
                 "user": {"email": "smoke@example.com", "fam": "Test", "name": "Test"},
@@ -102,6 +114,7 @@ def main():
 
             logs = compose("logs", "--no-color").stdout
             assert password not in logs
+            assert all(token not in logs for token in issued_secrets)
             assert re.search(r"postgres(?:ql)?(?:\+\w+)?://", logs) is None
             files = compose("exec", "-T", "app", "python", "-c", "from pathlib import Path; import json; print(json.dumps(sorted(str(p) for p in Path('/app').rglob('*') if p.is_file())))").stdout
             assert not any(part in files for part in ["/.env", "/.git/", "/.idea/", "get-docker.sh", "install.ps1", "init.sql", "__pycache__"])

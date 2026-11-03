@@ -17,8 +17,8 @@ pytestmark = pytest.mark.integration
 MODELS = (User, Coords, PerevalAdded, Image, PerevalImages)
 
 
-@pytest.mark.parametrize("stage", (*MODELS, "commit"))
-def test_create_failure_after_insert_rolls_back_before_session_close(pg_engine, test_pereval_data, stage):
+@pytest.mark.parametrize("stage", (Coords, PerevalAdded, Image, PerevalImages, "commit"))
+def test_create_failure_after_insert_rolls_back_before_session_close(pg_engine, pg_identity, test_pereval_data, stage):
     test_pereval_data["images"] = [photo()]
 
     def fail(*args):
@@ -31,20 +31,25 @@ def test_create_failure_after_insert_rolls_back_before_session_close(pg_engine, 
         event.listen(target, hook, fail)
         try:
             with pytest.raises(RuntimeError, match="Injected"):
-                services.create_pereval(session, PerevalCreate.model_validate(test_pereval_data))
+                services.create_pereval(session, PerevalCreate.model_validate(test_pereval_data), pg_identity["principal"])
         finally:
             event.remove(target, hook, fail)
         assert not session.in_transaction()  # Rollback happened before Session.close().
         with Session(pg_engine) as fresh:
-            assert all(fresh.query(model).count() == 0 for model in MODELS)
+            assert fresh.query(User).count() == 1
+            assert all(fresh.query(model).count() == 0 for model in MODELS if model is not User)
         # The same session remains usable after the rollback.
-        assert services.create_pereval(session, PerevalCreate.model_validate(test_pereval_data)) > 0
+        assert services.create_pereval(session, PerevalCreate.model_validate(test_pereval_data), pg_identity["principal"]) > 0
         assert not session.in_transaction()
 
 
 @pytest.mark.parametrize("stage", (Coords, PerevalAdded, Image, PerevalImages))
 def test_failure_preserves_existing_user_and_submission(pg_client, pg_engine, test_pereval_data, stage):
     test_pereval_data["user"].update(phone="+7 123", otc="Тестович")
+    with Session(pg_engine) as operator:
+        user = operator.query(User).one()
+        user.phone, user.otc = "+7 123", "Тестович"
+        operator.commit()
     test_pereval_data["images"] = [photo()]
     first = pg_client.post("/submitData/", json=test_pereval_data).json()["id"]
     before = pg_client.get(f"/submitData/{first}").json()
@@ -95,15 +100,15 @@ def test_update_failure_restores_fields_and_old_photos(pg_client, pg_engine, tes
 
 
 @pytest.mark.parametrize("conflict", (False, True))
-def test_parallel_posts_resolve_email_race(pg_client, pg_engine, test_pereval_data, conflict):
-    # Both SELECTs execute while the table is empty. Only then may either insert.
-    # This deterministically exercises the uniqueness race, not sequential reuse.
+def test_parallel_posts_use_provisioned_identity(pg_client, pg_engine, test_pereval_data, conflict):
+    # Both transactions read the same CLI-provisioned identity before writing.
     barrier = threading.Barrier(2, timeout=10)
     local = threading.local()
     reached = []
 
     def synchronize(connection, cursor, statement, parameters, context, executemany):
-        if statement.startswith("SELECT") and "FROM users" in statement and not getattr(local, "seen", False):
+        if (statement.startswith("SELECT") and "FROM users" in statement and "access_tokens" not in statement
+                and not getattr(local, "seen", False)):
             local.seen = True
             reached.append(threading.get_ident())
             barrier.wait()

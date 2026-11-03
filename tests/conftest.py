@@ -10,9 +10,11 @@ from sqlalchemy.orm import Session
 from sqlalchemy.pool import StaticPool
 from fastapi.testclient import TestClient
 from app.config import Settings
+from app.access import get_auth_db
 from app.main import create_app
 from app.database import get_db
 from app.validation import DEFAULT_LIMITS
+from tests.auth_helpers import provision
 
 
 @pytest.fixture
@@ -41,6 +43,7 @@ def test_app(test_settings):
 
     # Registered before either the test engine or the application's lifespan.
     application.dependency_overrides[get_db] = override_get_db
+    application.dependency_overrides[get_auth_db] = override_get_db
     try:
         yield application
     finally:
@@ -75,9 +78,15 @@ def db(test_app):
 
 
 @pytest.fixture
-def client(test_app, db):
+def identity(db, test_pereval_data):
+    return provision(db.get_bind(), test_pereval_data["user"])
+
+
+@pytest.fixture
+def client(test_app, db, identity):
     try:
         with TestClient(test_app) as test_client:
+            test_client.headers.update(identity["headers"])
             yield test_client
     finally:
         test_app.dependency_overrides.clear()
