@@ -1,0 +1,4 @@
+-c requirements.txt
+pytest==9.0.2
+httpx==0.28.1
+pip-tools==7.5.2

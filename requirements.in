@@ -1,0 +1,11 @@
+# Runtime. Preserve the existing application versions.
+fastapi==0.128.0
+sqlalchemy==2.0.46
+psycopg2==2.9.11
+python-dotenv==1.2.1
+pydantic==2.12.5
+uvicorn==0.40.0
+email-validator==2.3.0
+alembic==1.18.4
+pydantic-settings==2.14.0
+pillow==13.0.0

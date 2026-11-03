@@ -1,27 +1,27 @@
+"""Database objects are constructed explicitly, never during import."""
+
+from collections.abc import Iterator
+
+from fastapi import Request
 from sqlalchemy import create_engine
-from sqlalchemy.orm import declarative_base, sessionmaker
-import os
-from dotenv import load_dotenv
+from sqlalchemy.engine import Engine
+from sqlalchemy.orm import Session, declarative_base
 
-load_dotenv('.env')
+from app.config import Settings
 
-DB_HOST = os.getenv("FSTR_DB_HOST")
-DB_PORT = os.getenv("FSTR_DB_PORT")
-DB_NAME = os.getenv("FSTR_DB_NAME")
-DB_LOGIN = os.getenv("FSTR_DB_LOGIN")
-DB_PASS = os.getenv("FSTR_DB_PASS")
-
-DATABASE_URL = f"postgresql://{DB_LOGIN}:{DB_PASS}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
-print(DATABASE_URL)
-
-engine = create_engine(DATABASE_URL)
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 Base = declarative_base()
 
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
+
+def build_engine(settings: Settings) -> Engine:
+    return create_engine(
+        # Email collision recovery re-SELECTs the winning row after SAVEPOINT
+        # rollback. Each statement must see the latest committed snapshot.
+        settings.database_url, pool_pre_ping=True, hide_parameters=True,
+        isolation_level="READ COMMITTED",
+    )
+
+
+def get_db(request: Request) -> Iterator[Session]:
+    with request.app.state.session_factory() as session:
+        yield session

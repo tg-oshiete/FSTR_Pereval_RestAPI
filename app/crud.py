@@ -1,227 +1,28 @@
+"""Read queries; transaction ownership for writes lives in services.py."""
+
+from sqlalchemy import select
 from sqlalchemy.orm import Session, joinedload
-from app.schemas import PerevalCreate, PerevalResponse, PerevalUpdate
-from app.models import PerevalAdded, User, Coords, Image, PerevalImages
-import base64
-from fastapi import HTTPException
+
+from app.models import Coords, Image, PerevalAdded, PerevalImages, User
 
 
-class PerevalRepository:
-    @staticmethod
-    def create_pereval(db:Session, pereval_data: PerevalCreate) -> PerevalAdded:
-        user = db.query(User).filter(User.email == pereval_data.user.email).first()
-
-        if not user:
-            user = User(
-                email=pereval_data.user.email,
-                phone=pereval_data.user.phone,
-                fam=pereval_data.user.fam,
-                name=pereval_data.user.name,
-                otc=pereval_data.user.otc
-            )
-            db.add(user)
-            db.flush()
-
-        coords = Coords(
-            latitude=pereval_data.coords.latitude,
-            longitude=pereval_data.coords.longitude,
-            height=pereval_data.coords.height
-        )
-        db.add(coords)
-        db.flush()
-
-        pereval = PerevalAdded(
-            beauty_title=pereval_data.beauty_title,
-            title=pereval_data.title,
-            other_titles=pereval_data.other_titles,
-            connect=pereval_data.connect,
-            add_time=pereval_data.add_time,
-            user_id=user.id,
-            coord_id=coords.id,
-            level_spring=pereval_data.level.spring,
-            level_summer=pereval_data.level.summer,
-            level_autumn=pereval_data.level.autumn,
-            level_winter=pereval_data.level.winter,
-            status="new"
-        )
-        db.add(pereval)
-        db.flush()
-
-        for image_data in pereval_data.images:
-            try:
-                img_bytes = base64.b64decode(image_data.img)
-            except:
-                img_bytes = image_data.img.encode("utf-8")
-
-            image = Image(
-                img=img_bytes,
-                title=image_data.title
-            )
-            db.add(image)
-            db.flush()
-
-            pereval_image = PerevalImages(
-                id_pereval=pereval.id,
-                id_image=image.id
-            )
-            db.add(pereval_image)
-
-        db.commit()
-        db.refresh(pereval)
-
-        return pereval
+def get_pereval(db: Session, pereval_id: int) -> PerevalAdded | None:
+    return db.scalar(select(PerevalAdded).options(
+        joinedload(PerevalAdded.user), joinedload(PerevalAdded.coords),
+    ).where(PerevalAdded.id == pereval_id))
 
 
-    @staticmethod
-    def get_pereval_or_404(db:Session, pereval_id:int) -> PerevalAdded:
-        pereval = db.query(PerevalAdded).options(
-            joinedload(PerevalAdded.user),
-            joinedload(PerevalAdded.user),
-            joinedload(PerevalAdded.coords),
-            joinedload(PerevalAdded.images)
-        ).filter(PerevalAdded.id == pereval_id).first()
-        if not pereval:
-            raise HTTPException(status_code=404, detail="Перевал не найден")
+def get_images(db: Session, pereval_id: int) -> list[Image]:
+    return list(db.scalars(select(Image).join(PerevalImages).where(
+        PerevalImages.id_pereval == pereval_id,
+    ).order_by(PerevalImages.position, PerevalImages.id)))
 
-        images_data = []
-        for image in pereval.images:
-            try:
-                img_base64 = base64.b64encode(image.img).decode("utf-8")
-            except:
-                img_base64 = ""
 
-            images_data.append({
-                "img": img_base64,
-                "title": image.title
-            })
-
-        response_data = {
-            "id": pereval.id,
-            "status": pereval.status,
-            "date_added": pereval.date_added,
-            "beauty_title": pereval.beauty_title,
-            "title": pereval.title,
-            "other_titles": pereval.other_titles,
-            "connect": pereval.connect,
-            "add_time": pereval.add_time,
-            "user": {
-                "email": pereval.user.email,
-                "phone": pereval.user.phone,
-                "fam": pereval.user.fam,
-                "name": pereval.user.name,
-                "otc": pereval.user.otc
-            },
-            "coords": {
-                "latitude": pereval.coords.latitude,
-                "longitude": pereval.coords.longitude,
-                "height": pereval.coords.height
-            },
-            "level": {
-                "spring": pereval.level_spring,
-                "summer": pereval.level_summer,
-                "autumn": pereval.level_autumn,
-                "winter": pereval.level_winter
-            },
-            "images": images_data
-        }
-
-        return PerevalResponse(**response_data)
-
-    @staticmethod
-    def update_pereval(db: Session, pereval_id:int, update_data:PerevalUpdate) -> dict:
-        pereval = db.query(PerevalAdded).filter(PerevalAdded.id == pereval_id).first()
-
-        if not pereval:
-            raise HTTPException(status_code=404, detail="Перевал не найден")
-
-        if pereval.status != "new":
-            return {"status": 0, "message": f"Статус записи {pereval.status}. Редактирование невозможно"}
-
-        try:
-            update_dict = update_data.model_dump(exclude_none=True)
-            if "coords" in update_dict:
-                coords = db.query(Coords).filter(Coords.id == pereval.coord_id).first()
-                if coords:
-                    coords_data = update_dict["coords"]
-                    coords.latitude = coords_data.get("latitude", coords.latitude)
-                    coords.longitude = coords_data.get("longitude", coords.longitude)
-                    coords.height = coords_data.get("height", coords.height)
-
-            if "title" in update_dict:
-                pereval.title = update_dict["title"]
-            if "beauty_title" in update_dict:
-                pereval.beauty_title = update_dict["beauty_title"]
-            if "other_titles" in update_dict:
-                pereval.other_titles = update_dict["other_titles"]
-            if "connect" in update_dict:
-                pereval.connect = update_dict["connect"]
-            if "add_time" in update_dict:
-                pereval.add_time = update_dict["add_time"]
-
-            if "level" in update_dict:
-                level = update_dict["level"]
-                if "spring" in level:
-                    pereval.level_sprint = level["spring"]
-                if "summer" in level:
-                    pereval.level_summer = level["summer"]
-                if "winter" in level:
-                    pereval.level_winter = level["winter"]
-                if "autumn" in level:
-                    pereval.level_autumn = level["autumn"]
-
-            if "images" in update_dict:
-                db.query(PerevalImages).filter(PerevalImages.id_pereval == pereval_id).delete()
-
-                old_images = db.query(Image).join(PerevalImages).filter(
-                    PerevalImages.id_pereval == pereval_id).all()
-
-                for old_img in old_images:
-                    db.delete(old_img)
-
-                for img_data in update_dict["images"]:
-                    try:
-                        img_bytes = base64.b64decode(img_data["img"])
-                    except Exception as e:
-                        db.rollback()
-                        return {"state": 0, "message": f"Ошибка декодирования изображения: {str(e)}"}
-
-                    image = Image(img=img_bytes, title=img_data["title"])
-                    db.add(image)
-                    db.flush()
-
-                    link = PerevalImages(id_pereval=pereval_id, id_image=image.id)
-                    db.add(link)
-
-            db.commit()
-            return {"state": 1, "message": "Обновлено"}
-
-        except Exception as e:
-            db.rollback()
-            return {"state": 0, "message":f"Ошибка: {e}"}
-
-    @staticmethod
-    def get_perevals_by_email(db: Session, email:str) -> list:
-        user = db.query(User).filter(User.email == email).first()
-        if not user:
-            return []
-
-        perevals = db.query(PerevalAdded).options(
-            joinedload(PerevalAdded.user),
-            joinedload(PerevalAdded.coords),
-            joinedload(PerevalAdded.images),
-        ).filter(PerevalAdded.user_id == user.id).all()
-
-        result = []
-
-        for pereval in perevals:
-            result.append({
-                "id": pereval.id,
-                "title": pereval.title,
-                "status": pereval.status,
-                "date_added": pereval.date_added,
-                "user_email": pereval.user.email,
-                "latitude": pereval.coords.latitude,
-                "longitude": pereval.coords.longitude,
-                "height": pereval.coords.height
-            })
-
-        return result
+def get_perevals_by_email(db: Session, email: str, *, limit: int = 20, offset: int = 0):
+    # Select only the list's columns: no binary images or full profiles.
+    return db.execute(select(
+        PerevalAdded.id, PerevalAdded.title, PerevalAdded.status, PerevalAdded.date_added,
+        User.email.label("user_email"), Coords.latitude, Coords.longitude, Coords.height,
+    ).join(User).join(Coords).where(User.email == email).order_by(
+        PerevalAdded.id,
+    ).limit(limit).offset(offset)).mappings().all()

@@ -1,0 +1,26 @@
+# Only runtime source and migration inputs are allowed into the build context.
+**
+!Dockerfile
+!requirements.txt
+!app/
+!app/*.py
+!alembic.ini
+!alembic/
+!alembic/**
+
+# Defense in depth for files inside the allowlisted directories.
+**/.git
+**/.idea
+**/.vscode
+**/.venv*
+**/venv
+**/__pycache__
+**/*.py[cod]
+**/.pytest_cache
+**/.env
+**/.env.*
+**/*.pem
+**/*.key
+**/get-docker.sh
+**/install.ps1
+**/init.sql

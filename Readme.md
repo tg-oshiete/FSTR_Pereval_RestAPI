@@ -1,71 +1,34 @@
-# FSTR Pereval API
+# Pereval API
 
-REST API для управления информацией о горных перевалах.
+Учебный REST API для заявок о горных перевалах: координаты, сложность по сезонам
+и изображения. FastAPI, Pydantic, синхронный SQLAlchemy, PostgreSQL 18 и Alembic.
+Упоминание ФСТР относится к учебной постановке, реальное сотрудничество не заявляется.
 
-### Задача
-Разработать REST API для мобильного приложения, позволяющего туристам 
-добавлять информацию о новых горных перевалах. Данные должны проходить 
-модерацию сотрудниками ФСТР (Федерации спортивного туризма России).
+## Запуск
 
-### Что реализовано
-- REST API с методами для работы с перевалами
-- Система модерации (статусы: new, pending, accepted, rejected)
-- Валидация входных данных
-- Автоматическая документация Swagger
-- Полное тестирование CRUD операций и API эндпоинтов
+Python 3.13.9, отдельная PostgreSQL и пустая БД. Из корня проекта в PowerShell:
 
-## Быстрый старт
-
-1. Установите зависимости: `pip install -r requirements.txt`
-2. Настройте базу данных: (создайте .env файл)
-3. Запустите сервер:`uvicorn app.main:app --reload`
-
-
-## Документация
-
-FastAPI автоматически генерирует интерактивную документацию.
-
-После запуска сервера откройте:
-- **Swagger UI**: http://localhost:8000/docs
-- **ReDoc**: http://localhost:8000/redoc
-- **OpenAPI схема**: http://localhost:8000/openapi.json
-
-![swagger.png](swagger.png)
-
-
-## Как пользоваться документацией:
-1. Запустите сервер: `uvicorn app.main:app --reload`
-2. Откройте в браузере http://localhost:8000/docs
-3. Нажмите на любой эндпоинт -> "Try it out"
-4. Заполните данные и выполните запрос
-
-
-## Основные эндпоинты
-
-| Метод |              Путь              |        Описание        |
-|:-----:|:------------------------------:|:----------------------:|
-| Post  |         `/submitData/`         | Добавить новый перевал |
-|  GET  |       `/submitData/{id}`       | Получить перевал по ID |
-| PATCH |       `/submitData/{id}`       |    Обновить перевал    |
-|  GET  | `/submitData/?user__email=...` | Перевалы пользователя  |
-
-
-## Технологии
-
-**FastAPI** - веб-фреймворк для создания API
-
-**SQLAlchemy** - ORM для работы с базой данных
-
-**PostgreSQL** - база данных
-
-**Pydantic** - валидация данных
-
-**Pytest** - тестирование
-
-
-## Тестирование
-
-Запуск тестов
-```bash
-pytest -v 
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install -r requirements.txt -r requirements-dev.txt
+Copy-Item .env.example .env
+# Заполнить .env реквизитами локальной БД, не добавлять его в Git.
+python -m alembic upgrade head
+python -m app.main
 ```
+
+Swagger: [localhost:8000/docs](http://localhost:8000/docs).
+Повторный `alembic upgrade head` безопасен. Схема не создаётся при импорте.
+Docker Compose выполняет миграции до запуска приложения.
+
+## Проверки
+
+```powershell
+python -m pytest -m "not integration"
+python -m pytest -m integration tests/integration
+```
+
+Интеграционные тесты требуют Docker и создают одноразовый PostgreSQL.
+Проверяются ограничения, миграции, транзакции и конкурентные запросы.
+Справочник: [контракт API](docs/API_CONTRACT.md). Нагрузочные показатели не измерялись.

@@ -1,92 +1,268 @@
-from pydantic import BaseModel, EmailStr, Field, ConfigDict
-from typing import Optional, List
-from datetime import datetime
+from datetime import datetime, timezone
+import re
+from typing import Annotated, ClassVar, Literal
+
+from pydantic import (AfterValidator, BaseModel, BeforeValidator, ConfigDict, EmailStr,
+                      Field, PrivateAttr, StringConstraints, field_validator, model_validator)
+from pydantic_core import PydanticCustomError
+
+from app.validation import decode_image, upload_limits
 
 
-class UserCreate(BaseModel):
-    email: EmailStr
-    phone: Optional[str] = None
-    fam: str = Field(..., min_length=1)
-    name: str = Field(..., min_length=1)
-    otc: Optional[str] = None
+class StrictModel(BaseModel):
+    model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
 
 
-class CoordsCreate(BaseModel):
-    latitude: float = Field(..., ge=-90, le=90)
-    longitude: float = Field(..., ge=-180, le=180)
-    height: int = Field(..., gt=0)
+def no_controls(value: str, *, multiline=False) -> str:
+    allowed = "\n\t" if multiline else ""
+    if any((ord(char) < 32 or ord(char) == 127) and char not in allowed for char in value):
+        raise PydanticCustomError("string_controls", "Управляющие символы запрещены")
+    return value
 
 
-class LevelCreate(BaseModel):
-    spring: Optional[str] = None
-    summer: Optional[str] = None
-    autumn: Optional[str] = None
-    winter: Optional[str] = None
+def text(max_length, *, multiline=False):
+    return Annotated[str, StringConstraints(strict=True, strip_whitespace=True, min_length=1,
+                                            max_length=max_length),
+                     AfterValidator(lambda value: no_controls(value, multiline=multiline))]
 
 
-class ImageCreate(BaseModel):
-    img: str
-    title: str = Field(..., min_length=1)
+Title = text(255)
+Name = text(100)
+OtherTitles = text(1024)
+Connect = text(2000, multiline=True)
+Phone = text(32)
 
 
-class PerevalCreate(BaseModel):
-    beauty_title: Optional[str] = None
-    title: str = Field(..., min_length=1)
-    other_titles: Optional[str] = None
-    connect: Optional[str] = None
-    add_time: Optional[datetime] = Field(default_factory=datetime.now)
+def email_input(value):
+    if isinstance(value, str):
+        return no_controls(value.strip())
+    return value
+
+
+NormalizedEmail = Annotated[EmailStr, BeforeValidator(email_input), Field(max_length=254)]
+Latitude = Annotated[float, Field(strict=True, ge=-90, le=90, allow_inf_nan=False)]
+Longitude = Annotated[float, Field(strict=True, ge=-180, le=180, allow_inf_nan=False)]
+Height = Annotated[int, Field(strict=True, ge=1, le=10000)]
+
+
+def utc_timestamp(value):
+    if isinstance(value, str):
+        # RFC 3339 requires an offset and T; do not accept epochs or naive dates.
+        if not re.fullmatch(r"\d{4}-\d{2}-\d{2}[Tt]\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:[Zz]|[+-](?:[01]\d|2[0-3]):[0-5]\d)", value):
+            raise PydanticCustomError("datetime_invalid", "Нужно время RFC 3339 с часовым поясом")
+        try:
+            value = datetime.fromisoformat(value.upper().replace("Z", "+00:00"))
+        except ValueError:
+            raise PydanticCustomError("datetime_invalid", "Некорректное время") from None
+    if not isinstance(value, datetime) or value.tzinfo is None or value.utcoffset() is None:
+        raise PydanticCustomError("datetime_invalid", "Нужно время RFC 3339 с часовым поясом")
+    try:
+        return value.astimezone(timezone.utc)
+    except (OverflowError, ValueError):
+        raise PydanticCustomError("datetime_invalid", "Время вне допустимого диапазона UTC") from None
+
+
+UTCTimestamp = Annotated[datetime, BeforeValidator(utc_timestamp)]
+Difficulty = Literal["n/k", "1A", "1B", "2A", "2B", "3A", "3B"]
+PerevalStatus = Literal["new", "pending", "accepted", "rejected"]
+
+
+def difficulty(value):
+    if value is None:
+        return None
+    if isinstance(value, str):
+        normalized = value.strip().upper().translate(str.maketrans({"А": "A", "Б": "B"}))
+        if normalized in {"N/K", "Н/К"}:
+            return "n/k"
+        if normalized in {"1A", "1B", "2A", "2B", "3A", "3B"}:
+            return normalized
+    raise PydanticCustomError("level_invalid", "Некорректная категория сложности")
+
+
+DifficultyInput = Annotated[str, Field(
+    pattern=r"^\s*(?:[1-3][AaBbАаБб]|[Nn]/[Kk]|[Нн]/[Кк])\s*$",
+    description="Категория; краевые пробелы, нижний регистр и кириллические А/Б допустимы",
+)]
+Season = Annotated[Difficulty | None, BeforeValidator(difficulty, json_schema_input_type=DifficultyInput | None)]
+
+
+class UserCreate(StrictModel):
+    email: NormalizedEmail
+    phone: Phone | None = None
+    fam: Name
+    name: Name
+    otc: Name | None = None
+
+
+class CoordsCreate(StrictModel):
+    latitude: Latitude
+    longitude: Longitude
+    height: Height
+
+
+class NonEmptyUpdate(StrictModel):
+    empty_error: ClassVar[str] = "empty_object"
+
+    @model_validator(mode="before")
+    @classmethod
+    def require_changes(cls, value):
+        if isinstance(value, dict) and not value:
+            raise PydanticCustomError(cls.empty_error, "Нужно передать хотя бы одно поле")
+        return value
+
+
+class CoordsUpdate(NonEmptyUpdate):
+    # A default marks omission; supplied null is validated by the non-nullable type.
+    latitude: Latitude = None
+    longitude: Longitude = None
+    height: Height = None
+
+
+class LevelCreate(StrictModel):
+    spring: Season = None
+    summer: Season = None
+    autumn: Season = None
+    winter: Season = None
+
+
+class LevelUpdate(LevelCreate, NonEmptyUpdate):
+    pass
+
+
+class ImageCreate(StrictModel):
+    img: str = Field(min_length=1, description="Строгий RFC 4648 base64 однокадрового JPEG/PNG")
+    title: Title
+    _decoded_bytes: bytes = PrivateAttr()
+
+    @model_validator(mode="after")
+    def validate_file(self):
+        self._decoded_bytes = decode_image(self.img)
+        return self
+
+    @property
+    def decoded_bytes(self) -> bytes:
+        return self._decoded_bytes
+
+
+class ImageCollection(StrictModel):
+    @field_validator("images", mode="before", check_fields=False)
+    @classmethod
+    def check_count(cls, value):
+        if isinstance(value, list) and len(value) > upload_limits.get().max_images_per_pereval:
+            raise PydanticCustomError("images_count", "Превышено количество фотографий")
+        return value
+
+    @field_validator("images", check_fields=False)
+    @classmethod
+    def check_total(cls, value):
+        if sum(len(image.decoded_bytes) for image in value) > upload_limits.get().max_images_total_bytes:
+            raise PydanticCustomError("images_total_bytes", "Превышен суммарный размер фотографий")
+        return value
+
+
+class PerevalCreate(ImageCollection):
+    beauty_title: Title | None = None
+    title: Title
+    other_titles: OtherTitles | None = None
+    connect: Connect | None = None
+    add_time: UTCTimestamp = Field(default_factory=lambda: datetime.now(timezone.utc))
     user: UserCreate
     coords: CoordsCreate
     level: LevelCreate
-    images: List[ImageCreate] = []
+    images: list[ImageCreate] = Field(default_factory=list)
 
 
-class SubmitResponse(BaseModel):
-    status: int = 200
-    message: str = "Отправлено успешно"
-    id: int
+class PerevalUpdate(ImageCollection, NonEmptyUpdate):
+    empty_error: ClassVar[str] = "empty_patch"
+
+    beauty_title: Title | None = None
+    title: Title = None
+    other_titles: OtherTitles | None = None
+    connect: Connect | None = None
+    add_time: UTCTimestamp = None
+    coords: CoordsUpdate = None
+    level: LevelUpdate = None
+    images: list[ImageCreate] = None
 
 
-class ErrorResponse(BaseModel):
-    status: int
-    message: str
-    detail: Optional[str] = None
+class SubmitResponse(StrictModel):
+    status: Literal[201] = 201
+    message: Literal["Отправлено успешно"] = "Отправлено успешно"
+    id: int = Field(ge=1, le=2147483647)
+
+
+class UserResponse(UserCreate):
+    phone: Phone | None
+    otc: Name | None
+
+
+class LevelResponse(LevelCreate):
+    spring: Season
+    summer: Season
+    autumn: Season
+    winter: Season
 
 
 class PerevalResponse(PerevalCreate):
-    id: int
-    status: str
-    date_added: datetime
-
-    model_config = ConfigDict(from_attributes=True)
-
-
-class PerevalList(BaseModel):
-    id: int
-    title: str
-    status: str
-    date_added: datetime
-    user_email: str
-    latitude: float
-    longitude: float
-    height: int
-
-    model_config = ConfigDict(from_attributes=True)
+    beauty_title: Title | None
+    other_titles: OtherTitles | None
+    connect: Connect | None
+    add_time: UTCTimestamp
+    user: UserResponse
+    level: LevelResponse
+    images: list[ImageCreate]
+    id: int = Field(ge=1, le=2147483647)
+    status: PerevalStatus
+    date_added: UTCTimestamp
 
 
-class PerevalUpdate(BaseModel):
-    beauty_title: Optional[str] = None
-    title: Optional[str] = None
-    other_titles: Optional[str] = None
-    connect: Optional[str] = None
-    add_time: Optional[datetime] = None
-    coords: Optional[CoordsCreate] = None
-    level: Optional[LevelCreate] = None
-    images: Optional[List[ImageCreate]] = None
-
-    model_config = ConfigDict(extra="forbid")
+class PerevalList(StrictModel):
+    id: int = Field(ge=1, le=2147483647)
+    title: Title
+    status: PerevalStatus
+    date_added: UTCTimestamp
+    user_email: NormalizedEmail
+    latitude: Latitude
+    longitude: Longitude
+    height: Height
 
 
-class UpdateResponse(BaseModel):
-    state: int
+class UpdateResponse(StrictModel):
+    state: Literal[1] = 1
+    message: Literal["Обновлено"] = "Обновлено"
+
+
+ErrorCode = Literal["PEREVAL_NOT_FOUND", "ROUTE_NOT_FOUND", "METHOD_NOT_ALLOWED",
+                    "PEREVAL_NOT_EDITABLE", "USER_PROFILE_CONFLICT", "PAYLOAD_TOO_LARGE", "INTERNAL_ERROR"]
+ValidationType = Literal[
+    "missing", "extra_forbidden", "string_type", "string_too_short", "string_too_long", "string_controls",
+    "int_type", "float_type", "finite_number", "greater_than_equal", "less_than_equal", "list_type",
+    "object_type", "datetime_invalid", "email_invalid", "level_invalid", "empty_patch", "empty_object",
+    "image_base64", "image_bytes", "image_dimensions", "image_pixels", "image_format", "images_count",
+    "images_total_bytes", "json_invalid", "invalid_value",
+]
+
+
+class ErrorDetail(StrictModel):
+    code: ErrorCode
     message: str
+
+
+class ErrorResponse(StrictModel):
+    detail: ErrorDetail
+
+
+class ValidationIssue(StrictModel):
+    loc: list[str | int]
+    type: ValidationType
+    message: str
+
+
+class ValidationErrorDetail(StrictModel):
+    code: Literal["VALIDATION_ERROR"] = "VALIDATION_ERROR"
+    message: Literal["Некорректные данные запроса"] = "Некорректные данные запроса"
+    errors: list[ValidationIssue] = Field(min_length=1)
+
+
+class ValidationErrorResponse(StrictModel):
+    detail: ValidationErrorDetail

@@ -1,0 +1,60 @@
+x-api: &api
+  build: .
+  environment:
+    FSTR_DB_HOST: postgres
+    FSTR_DB_PORT: "5432"
+    FSTR_DB_NAME: ${FSTR_DB_NAME:?Set FSTR_DB_NAME in .env or the environment}
+    FSTR_DB_LOGIN: ${FSTR_DB_LOGIN:?Set FSTR_DB_LOGIN in .env or the environment}
+    FSTR_DB_PASS: ${FSTR_DB_PASS:?Set a local FSTR_DB_PASS in .env or the environment}
+    PORT: "8000"
+    FSTR_MAX_IMAGES_PER_PEREVAL: ${FSTR_MAX_IMAGES_PER_PEREVAL:-5}
+    FSTR_MAX_IMAGE_BYTES: ${FSTR_MAX_IMAGE_BYTES:-5242880}
+    FSTR_MAX_IMAGES_TOTAL_BYTES: ${FSTR_MAX_IMAGES_TOTAL_BYTES:-20971520}
+    FSTR_MAX_IMAGE_PIXELS: ${FSTR_MAX_IMAGE_PIXELS:-24000000}
+    FSTR_MAX_IMAGE_DIMENSION: ${FSTR_MAX_IMAGE_DIMENSION:-12000}
+    FSTR_MAX_REQUEST_BYTES: ${FSTR_MAX_REQUEST_BYTES:-33554432}
+
+services:
+  postgres:
+    image: postgres:18-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${FSTR_DB_LOGIN:?Set FSTR_DB_LOGIN}
+      POSTGRES_PASSWORD: ${FSTR_DB_PASS:?Set FSTR_DB_PASS}
+      POSTGRES_DB: ${FSTR_DB_NAME:?Set FSTR_DB_NAME}
+    volumes:
+      # PostgreSQL 18 uses PGDATA=/var/lib/postgresql/18/docker.
+      # New volume name: never adopt the old postgres_data volume implicitly.
+      - postgres18_data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\""]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+      start_period: 5s
+
+  migrate:
+    <<: *api
+    command: ["python", "-m", "alembic", "upgrade", "head"]
+    restart: "no"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  app:
+    <<: *api
+    restart: unless-stopped
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    ports:
+      - "127.0.0.1:${PORT:-8000}:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3).close()"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+
+volumes:
+  postgres18_data:
