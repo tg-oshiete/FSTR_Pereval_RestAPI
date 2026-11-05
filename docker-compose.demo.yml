@@ -1,0 +1,5 @@
+# Opt-in only. Use with docker-compose.yml and a separate *_demo database.
+services:
+  app:
+    environment:
+      FSTR_DEMO_MODE: "true"

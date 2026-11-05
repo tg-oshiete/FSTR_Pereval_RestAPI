@@ -28,6 +28,7 @@ class Settings(BaseSettings):
     db_name: NonEmptyString
     db_login: NonEmptyString
     db_pass: SecretStr = Field(min_length=1, repr=False)
+    demo_mode: bool = False
     port: int = Field(default=8000, validation_alias="PORT", ge=1, le=65535)
 
     max_images_per_pereval: int = Field(default=DEFAULT_LIMITS.max_images_per_pereval, ge=0)
