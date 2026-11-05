@@ -176,7 +176,7 @@ def main():
             assert re.search(r"postgres(?:ql)?(?:\+\w+)?://", logs) is None
             files = compose("exec", "-T", "app", "python", "-c", "from pathlib import Path; import json; print(json.dumps(sorted(str(p) for p in Path('/app').rglob('*') if p.is_file())))").stdout
             assert not any(part in files for part in ["/.env", "/.git/", "/.idea/", "get-docker.sh", "install.ps1", "init.sql", "__pycache__"])
-            compose("exec", "-T", "app", "python", "-c", "from importlib.util import find_spec; assert all(find_spec(name) is None for name in ['pytest', 'httpx', 'piptools'])")
+            compose("exec", "-T", "app", "python", "-c", "from importlib.util import find_spec; assert all(find_spec(name) is None for name in ['pytest', 'httpx', 'httpx2', 'piptools'])")
             print("Persistence after PostgreSQL container recreation, safe logs and runtime files: OK", flush=True)
         finally:
             compose("down", *(["--volumes"] if args.remove_volume else []))

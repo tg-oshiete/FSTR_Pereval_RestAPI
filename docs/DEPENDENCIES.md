@@ -1,63 +1,90 @@
 # Аудит безопасности зависимостей
 
-Срез: 3 ноября 2026 года, Python 3.13.9, pip-audit 2.10.1, источник PyPI.
+**QA-01 / P1 закрыта 5 ноября 2026 года.** Обновлены библиотеки с известными
+уязвимостями, совместимость подтверждена тестами и контейнерным запуском. Проверка исходных
+lock-файлов 5 ноября 2026 года повторно дала 36 advisory-записей в 10 пакетах
+(20 уникальных идентификаторов). После обновления аудит обоих lock-файлов
+возвращает код 0: **известных уязвимостей не найдено**, исключения не добавлялись.
+Итоговые проверки совместимости приведены в [отчёте](VERIFICATION.md).
 
-**QA-01 / P1, открыт.** Команда возвращает код 1: 36 записей в 10 пакетах,
-20 различных идентификаторов advisory после удаления повторов. Повторы в ответе
-источника не означают разные уязвимости. Приёмка всех обязательных jobs заблокирована.
+## Обновлённые версии
 
-Воспроизведение после установки обоих lock-файлов:
+| Пакет | Было | Стало |
+| --- | --- | --- |
+| FastAPI | 0.128.0 | 0.133.1 |
+| Starlette | 0.50.0 | 1.3.1 |
+| AnyIO | 4.12.1 | 4.14.2 |
+| dnspython | 2.8.0 | 2.9.0 |
+| idna | 3.11 | 3.18 |
+| pydantic-settings | 2.14.0 | 2.14.2 |
+| python-dotenv | 1.2.1 | 1.2.2 |
+| certifi | 2026.1.4 | 2026.10.18 |
+| Pygments | 2.19.2 | 2.20.0 |
+| pytest | 9.0.2 | 9.0.3 |
+| pip | 25.2 | 26.2 |
+| pip-tools | 7.5.2 | 7.6.2 |
+
+Версии выбранных пакетов проверены по метаданным PyPI и итоговым аудитом полного
+набора. Остальные прямые runtime-зависимости, в том числе SQLAlchemy, psycopg2,
+Pydantic и Uvicorn, сохранены. Новые минимальные версии зависимостей явно указаны
+в `.in`, точные версии полного набора фиксируются в `.txt`.
+
+## Совместимость FastAPI и Starlette
+
+Прежний FastAPI требовал `starlette>=0.40.0,<0.51.0`, поэтому обновить только
+Starlette было нельзя. FastAPI 0.133.1 допускает Starlette 1.x: поддержка добавлена
+в [FastAPI 0.133.0](https://fastapi.tiangolo.com/release-notes/#01330).
+В проекте проверяется конкретная пара **FastAPI 0.133.1 / Starlette 1.3.1**.
+Исправления обработки форм вошли в
+[Starlette 1.3.1](https://starlette.dev/release-notes/#131-june-12-2026).
+
+Starlette также перевела TestClient на HTTPX2. С прежним HTTPX импорт выводил
+предупреждение, нарушая проверку отсутствия побочных эффектов. Dev-зависимость
+заменена на `httpx2==2.12.0`, сетевые тесты используют тот же клиент. Вместе с ним
+устанавливаются `httpcore2==2.12.0` и `truststore==0.10.5`; для совместимости idna
+поднята до 3.18. Предупреждения не подавляются, проверки не ослаблены.
+[Документация TestClient](https://starlette.dev/testclient/).
+
+Runtime-код, API-контракт и миграции не изменены. HTTPX2 остаётся только в
+окружении разработки; контейнерный smoke проверяет отсутствие dev-пакетов в API-образе.
+
+## Установщик в Docker
+
+Базовый `python:3.13.9-slim` содержал pip 25.2. Dockerfile обновляет установщик до
+26.2 и на этапе сборки wheels, и в итоговом образе. Wheel установщика переносится
+между стадиями, финальная установка использует `--no-index` и локальные wheels.
+Python и версия PostgreSQL сохранены. Это аудит Python-пакетов, не системных
+пакетов Debian и не оценка всех возможных уязвимостей инфраструктуры.
+
+## Воспроизведение
+
+После установки runtime- и dev-lock-файлов в новое окружение:
 
 ```powershell
+python -m pip check
 New-Item -ItemType Directory -Force reports | Out-Null
 python -m pip_audit --disable-pip --no-deps -r requirements.txt -r requirements-dev.txt --format json --output reports/pip-audit.json
+python -m pip_audit --local --format json --output reports/environment-audit.json
 ```
 
-Полный машинный отчёт остаётся в `reports/pip-audit.json` и публикуется как
-артефакт CI даже при провале проверки. Ошибки сети/источника тоже не дают зелёный job.
-Ни `--ignore-vuln`, ни автоматического `--fix`, ни `continue-on-error` нет.
+Первая команда проверяет объявленную совместимость пакетов, следующие — известные
+уязвимости в lock-файлах и реально установленном окружении. Ожидаемый результат
+аудита — код 0 и `No known vulnerabilities found`. `--ignore-vuln`, `--fix`,
+`continue-on-error` и исключений advisory нет. Ошибка сети не считается успехом.
 
-## Найденные уязвимости
+Пересборка lock-файлов после согласованного изменения `.in`:
 
-| Пакет / установленная версия | Advisory | Исправленные версии по источнику | Область |
-| --- | --- | --- | --- |
-| `anyio==4.12.1` | [GHSA-82r6-8w77-94w6](https://github.com/advisories/GHSA-82r6-8w77-94w6) (`PYSEC-2026-4025`) | 4.14.2 | Runtime-зависимости |
-| `anyio==4.12.1` | [GHSA-5p39-cfhj-2xmp](https://github.com/advisories/GHSA-5p39-cfhj-2xmp) (`PYSEC-2026-4024`) | 4.14.2 | Runtime-зависимости |
-| `dnspython==2.8.0` | [GHSA-45c3-73f7-pv4m](https://github.com/advisories/GHSA-45c3-73f7-pv4m) (`CVE-2026-114605`) | 2.9.0 | Runtime-зависимости |
-| `idna==3.11` | [GHSA-65pc-fj4g-8rjx](https://github.com/advisories/GHSA-65pc-fj4g-8rjx) (`PYSEC-2026-215`) | 3.15 | Runtime-зависимости |
-| `pydantic-settings==2.14.0` | [GHSA-4xgf-cpjx-pc3j](https://github.com/advisories/GHSA-4xgf-cpjx-pc3j) (`CVE-2026-58203`) | 2.14.2 | Runtime-зависимости |
-| `python-dotenv==1.2.1` | [GHSA-mf9w-mj56-hr94](https://github.com/advisories/GHSA-mf9w-mj56-hr94) (`PYSEC-2026-2270`) | 1.2.2 | Runtime-зависимости |
-| `starlette==0.50.0` | [GHSA-86qp-5c8j-p5mr](https://github.com/advisories/GHSA-86qp-5c8j-p5mr) (`PYSEC-2026-161`) | 1.0.1 | HTTP-стек и совместимость |
-| `starlette==0.50.0` | [GHSA-wqp7-x3pw-xc5r](https://github.com/advisories/GHSA-wqp7-x3pw-xc5r) (`PYSEC-2026-2281`) | 1.1.0 | HTTP-стек и совместимость |
-| `starlette==0.50.0` | [GHSA-x746-7m8f-x49c](https://github.com/advisories/GHSA-x746-7m8f-x49c) (`PYSEC-2026-2280`) | 1.1.0 | HTTP-стек и совместимость |
-| `starlette==0.50.0` | [GHSA-82w8-qh3p-5jfq](https://github.com/advisories/GHSA-82w8-qh3p-5jfq) (`PYSEC-2026-249`) | 1.3.1 | HTTP-стек и совместимость |
-| `starlette==0.50.0` | [GHSA-jp82-jpqv-5vv3](https://github.com/advisories/GHSA-jp82-jpqv-5vv3) (`PYSEC-2026-248`) | 1.3.0 | HTTP-стек и совместимость |
-| `certifi==2026.1.4` | [GHSA-6q48-6c7w-9gw2](https://github.com/advisories/GHSA-6q48-6c7w-9gw2) (`PYSEC-2026-4320`) | 2026.10.18 | Dev-зависимости |
-| `pygments==2.19.2` | [GHSA-5239-wwwm-4pmq](https://github.com/advisories/GHSA-5239-wwwm-4pmq) (`PYSEC-2026-2987`) | 2.20.0 | Dev-зависимости |
-| `pytest==9.0.2` | [GHSA-6w46-j5rx-g56g](https://github.com/advisories/GHSA-6w46-j5rx-g56g) (`PYSEC-2026-1845`) | 9.0.3 | Dev-зависимости |
-| `pip==25.2` | [GHSA-4xh5-x5gv-qwph](https://github.com/advisories/GHSA-4xh5-x5gv-qwph) (`PYSEC-2026-1795`) | 25.3 | Dev-зависимости |
-| `pip==25.2` | [GHSA-6vgw-5pg2-w6jp](https://github.com/advisories/GHSA-6vgw-5pg2-w6jp) (`PYSEC-2026-1796`) | 26.0 | Dev-зависимости |
-| `pip==25.2` | [GHSA-58qw-9mgm-455v](https://github.com/advisories/GHSA-58qw-9mgm-455v) (`PYSEC-2026-2875`) | 26.1 | Dev-зависимости |
-| `pip==25.2` | [GHSA-jp4c-xjxw-mgf9](https://github.com/advisories/GHSA-jp4c-xjxw-mgf9) (`PYSEC-2026-2876`) | 26.1 | Dev-зависимости |
-| `pip==25.2` | [GHSA-wf93-45jw-7689](https://github.com/advisories/GHSA-wf93-45jw-7689) (`PYSEC-2026-196`) | 26.1.2 | Dev-зависимости |
-| `pip==25.2` | [GHSA-qwm4-qh6w-59xr](https://github.com/advisories/GHSA-qwm4-qh6w-59xr) (`PYSEC-2026-3721`) | 26.2.0 | Dev-зависимости |
+```powershell
+python -m piptools compile --strip-extras --allow-unsafe --no-emit-index-url --no-emit-trusted-host --output-file requirements.txt requirements.in
+python -m piptools compile --strip-extras --allow-unsafe --no-emit-index-url --no-emit-trusted-host --output-file requirements-dev.txt requirements-dev.in
+```
 
-## Ограничение совместимости
+Повторная компиляция текущего набора даёт те же файлы. Для выборочного обновления
+нужного транзитивного пакета добавьте `--upgrade-package <имя>`;
+[правила обновления pip-tools](https://pip-tools.pypa.io/en/stable/#updating-requirements).
+После изменения пакетов обязательны чистая установка, тесты, Docker smoke и аудит.
+Команды перечислены в [README](../Readme.md#проверки-qa-и-ci).
 
-`fastapi==0.128.0` объявляет `starlette>=0.40.0,<0.51.0` (проверено через
-`importlib.metadata.requires("fastapi")`). Исправления найденных Starlette advisory
-начинаются с 1.x; простая замена транзитивного pin нарушит ограничение FastAPI.
-Необходимо выбрать совместимую пару FastAPI/Starlette и проверить
-валидацию, ошибки, OpenAPI, middleware и авторизацию. Также необходимо согласовать
-остальные точечные обновления и пересобрать lock-файлы через pip-tools.
-
-Наличие advisory у пакета не доказывает эксплуатацию в этом API. Например,
-часть находок касается form/static/TLS/локальных установщиков. Отдельной
-эксплуатационной оценки каждого пути здесь нет; исключения не назначены.
-Обязательная проверка наличия известных уязвимостей остаётся блокирующей.
-
-После исправления: повторить аудит обоих lock-файлов, чистую установку и
-`pip check`, Ruff, быстрые и PostgreSQL-тесты, сборку и контейнерный HTTP smoke.
-Для изменений HTTP-стека отдельно повторить `tests/integration/test_http_blackbox.py`
-и `tests/integration/test_access_moderation.py`. Затем запустить удалённый CI.
-При аудите массовое обновление зависимостей не выполнялось.
+Отчёты аудита сохраняются в `reports/` локально и как артефакты CI. Нулевой результат
+означает отсутствие **известных источнику на момент проверки** уязвимостей, а не
+гарантию абсолютной безопасности. Проверка остаётся обязательной в GitHub Actions.

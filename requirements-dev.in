@@ -1,7 +1,12 @@
 -c requirements.txt
-pytest==9.0.2
-httpx==0.28.1
-pip-tools==7.5.2
+pytest==9.0.3
+httpx2==2.12.0
+pip-tools==7.6.2
 ruff==0.17.3
 pytest-cov==7.1.0
 pip-audit==2.10.1
+
+# Pin the installer used by pip-tools/pip-api and retain security floors.
+pip==26.2
+certifi>=2026.10.18
+pygments>=2.20.0

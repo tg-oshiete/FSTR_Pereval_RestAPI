@@ -15,7 +15,7 @@ import subprocess
 import sys
 import time
 
-import httpx
+import httpx2 as httpx
 import pytest
 from sqlalchemy import text
 
