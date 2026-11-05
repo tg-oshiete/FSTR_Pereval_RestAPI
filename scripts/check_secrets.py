@@ -1,7 +1,7 @@
 """Scan all Git history and files destined for Git, without reading local .env.
 
-Requires Docker, not a paid Gitleaks action/license. Historical exceptions are
-exact fingerprints in .gitleaksignore; new files/commits receive no exemptions.
+Requires Docker, not a paid Gitleaks action/license. Current files and every
+reachable commit are checked without per-finding or inline exemptions.
 """
 
 import json
@@ -22,9 +22,9 @@ def scan(source, command, report, *extra):
         "docker", "run", "--rm",
         "--mount", f"type=bind,source={source},target=/scan,readonly",
         "--mount", f"type=bind,source={ROOT / '.gitleaks.toml'},target=/config.toml,readonly",
-        "--mount", f"type=bind,source={ROOT / '.gitleaksignore'},target=/ignore,readonly",
         "--mount", f"type=bind,source={report.parent},target=/reports",
-        IMAGE, command, "--config", "/config.toml", "--gitleaks-ignore-path", "/ignore",
+        IMAGE, command, "--config", "/config.toml", "--gitleaks-ignore-path", "/dev/null",
+        "--ignore-gitleaks-allow",
         "--redact", "--no-banner", "--report-format", "json",
         "--report-path", f"/reports/{report.name}", *extra, "/scan",
     ], cwd=ROOT, timeout=180)
@@ -68,8 +68,8 @@ def main():
         current_code, _ = scan(snapshot, "dir", reports / "gitleaks-current.json")
         history_code, _ = scan(ROOT, "git", reports / "gitleaks-history.json", "--log-opts=--all")
     if current_code or history_code:
-        raise SystemExit("New secrets detected; inspect redacted reports/gitleaks-*.json")
-    print("Gitleaks: current Git files and complete history passed; exact historical exceptions only", flush=True)
+        raise SystemExit("Secrets detected; inspect redacted reports/gitleaks-*.json")
+    print("Gitleaks: current Git files and complete history passed without finding exemptions", flush=True)
 
 
 if __name__ == "__main__":
