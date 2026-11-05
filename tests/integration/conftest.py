@@ -36,7 +36,7 @@ def migrate(engine, revision="head", *, downgrade=False):
 
 
 @pytest.fixture(scope="session")
-def postgres_server():
+def postgres_server(request):
     name = "fstr-integration-" + secrets.token_hex(8)
     password = secrets.token_urlsafe(32)
     env = {key: value for key, value in os.environ.items()
@@ -51,6 +51,22 @@ def postgres_server():
 
     container = None
     try:
+        service = request.config.getoption("--postgres-service-container")
+        if service:
+            # CI opts in to its newly created service by ID, never by an external
+            # DSN. Inspect only that container and refuse unmarked resources.
+            info = json.loads(docker("inspect", service).stdout)[0]
+            if (info["Config"]["Image"] != "postgres:18-alpine"
+                    or (info["Config"].get("Labels") or {}).get("fstr.qa.disposable") != "true"):
+                pytest.fail("Refusing an unmarked/non-PG18 service container", pytrace=False)
+            settings = dict(entry.split("=", 1) for entry in info["Config"]["Env"] if "=" in entry)
+            if settings.get("POSTGRES_DB") != "postgres" or settings.get("POSTGRES_USER") != "integration":
+                pytest.fail("Unexpected disposable service identity", pytrace=False)
+            binding = info["NetworkSettings"]["Ports"]["5432/tcp"][0]
+            yield URL.create("postgresql+psycopg2", username="integration",
+                             password=settings["POSTGRES_PASSWORD"], host="127.0.0.1",
+                             port=int(binding["HostPort"]), database="postgres")
+            return  # GitHub Actions owns the service lifecycle.
         # Docker refuses an existing name; never inspect/adopt another container.
         container = docker("run", "--detach", "--rm", "--name", name,
                            "--tmpfs", "/var/lib/postgresql", "--publish", "127.0.0.1::5432",

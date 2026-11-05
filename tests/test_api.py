@@ -1,4 +1,3 @@
-import pytest
 
 
 def test_create_and_get_pereval(client, test_pereval_data):

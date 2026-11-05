@@ -2,8 +2,10 @@
 
 Run from a clean checkout: python scripts/check_compose.py
 Only this script's containers/network are stopped afterward; its test volume stays.
+CI uses --remove-volume to remove only the volume this invocation created.
 """
 
+import argparse
 import json
 import os
 from pathlib import Path
@@ -21,7 +23,10 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def main():
-    project = "fstr-compose-" + secrets.token_hex(5)
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--remove-volume", action="store_true", help="Remove this run's new disposable volume")
+    args = parser.parse_args()
+    project = "fstr-qa-" + secrets.token_hex(5)
     volume = project + "_postgres18_data"
     password = secrets.token_urlsafe(24) + "@:/#?%$"
     issued_secrets = []
@@ -37,7 +42,7 @@ def main():
         return re.sub(r"postgres(?:ql)?(?:\+\w+)?://\S+", "[REDACTED DSN]", output)
 
     def run(args, *, check=True):
-        result = subprocess.run(args, cwd=ROOT, env=env, capture_output=True, text=True, encoding="utf-8", errors="replace")
+        result = subprocess.run(args, cwd=ROOT, env=env, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=600)
         if check and result.returncode:
             lines = redact(result.stdout + result.stderr).splitlines()
             relevant = [line for line in lines if re.search(r"error|fatal|failed|not found", line, re.I)]
@@ -60,12 +65,24 @@ def main():
 
         authorization = {}
 
-        def request(path, data=None):
+        def request(path, data=None, *, method=None, headers=None, expected=None):
             body = json.dumps(data).encode() if data is not None else None
             req = urllib.request.Request(f"http://127.0.0.1:{port}{path}", data=body,
-                                         headers={"Content-Type": "application/json", **authorization})
-            with urllib.request.urlopen(req, timeout=5) as response:
-                return response.status, response.read()
+                                         method=method,
+                                         headers={"Content-Type": "application/json", **(authorization if headers is None else headers)})
+            try:
+                response = urllib.request.urlopen(req, timeout=5)
+            except urllib.error.HTTPError as error:
+                response = error
+            with response:
+                result = response.status, response.read()
+                if expected is not None:
+                    assert response.status == expected, f"{req.method} {path}: HTTP {response.status}, expected {expected}"
+                return result
+
+        def error(path, status, code, **kwargs):
+            _, body = request(path, expected=status, **kwargs)
+            assert json.loads(body)["detail"]["code"] == code
 
         def wait_for(path):
             deadline = time.monotonic() + 60
@@ -91,25 +108,66 @@ def main():
             assert any(m["Name"] == volume and m["Destination"] == "/var/lib/postgresql" for m in info["Mounts"] if m["Type"] == "volume")
             pgdata = compose("exec", "-T", "postgres", "sh", "-c", 'printf "%s" "$PGDATA"').stdout.strip()
             assert pgdata == "/var/lib/postgresql/18/docker"
+            compose("exec", "-T", "app", "python", "-c", "import os,sys; assert os.geteuid() != 0; assert sys.version_info[:3] == (3,13,9)")
             print("Migration, repeat upgrade, model/schema comparison, health/docs and PG18 mount: OK", flush=True)
 
-            issued = json.loads(compose("exec", "-T", "app", "python", "-m", "app.cli", "issue",
-                                        "--email", "smoke@example.com", "--role", "author",
-                                        "--fam", "Test", "--name", "Test").stdout)
-            issued_secrets.append(issued["token"])
-            authorization["Authorization"] = "Bearer " + issued["token"]
+            def issue(email, role):
+                issued = json.loads(compose("exec", "-T", "app", "python", "-m", "app.cli", "issue",
+                                            "--email", email, "--role", role,
+                                            "--fam", "Test", "--name", "Test").stdout)
+                issued_secrets.append(issued["token"])
+                return {"Authorization": "Bearer " + issued["token"]}
 
-            status, body = request("/submitData/", {
-                "title": "Persistence test",
-                "user": {"email": "smoke@example.com", "fam": "Test", "name": "Test"},
-                "coords": {"latitude": 20, "longitude": 80, "height": 3200},
-                "level": {},
+            author = issue("smoke-author@example.com", "author")
+            other = issue("smoke-other@example.com", "author")
+            moderator = issue("smoke-mod@example.com", "moderator")
+            authorization.update(author)
+            payload = {
+                "title": "Container HTTP smoke",
+                "beauty_title": "пер.",
+                "user": {"email": "smoke-author@example.com", "fam": "Test", "name": "Test"},
+                "coords": {"latitude": -90, "longitude": 180, "height": 1},
+                "level": {"spring": "1A"},
+            }
+            _, body = request("/submitData/", payload, expected=201)
+            created = json.loads(body)
+            assert created["status"] == 201
+            item_id = created["id"]
+            path = f"/submitData/{item_id}"
+            error(path, 401, "UNAUTHORIZED", headers={})
+            error(path, 403, "FORBIDDEN", headers=other)
+            error(path, 403, "FORBIDDEN", headers=moderator, method="PATCH", data={"title": "Forbidden"})
+            error("/moderation/perevals", 403, "FORBIDDEN")
+            error("/submitData/2147483647", 404, "PEREVAL_NOT_FOUND")
+            before = json.loads(request(path, expected=200)[1])
+            error(path, 422, "VALIDATION_ERROR", method="PATCH", data={"title": "Partial leak", "coords": {"height": 10001}})
+            assert json.loads(request(path, expected=200)[1]) == before
+            request(path, method="PATCH", expected=200, data={
+                "title": "Edited in container", "beauty_title": None,
+                "coords": {"height": 10000}, "level": {"spring": None, "winter": "2Б"},
             })
-            assert status == 201
-            item_id = json.loads(body)["id"]
+            edited = json.loads(request(path, expected=200)[1])
+            assert edited["coords"] == {"latitude": -90, "longitude": 180, "height": 10000}
+            assert edited["beauty_title"] is None and edited["level"]["spring"] is None
+            assert edited["level"]["winter"] == "2B"
+            assert len(json.loads(request("/submitData/?user__email=smoke-author@example.com", expected=200)[1])) == 1
+
+            for final in ["accepted", "rejected"]:
+                current_id = item_id if final == "accepted" else json.loads(request("/submitData/", payload, expected=201)[1])["id"]
+                route = f"/moderation/perevals/{current_id}/status"
+                for old, new in [("new", "pending"), ("pending", final)]:
+                    data = {"expected_status": old, "status": new, "reason": "Container review"}
+                    request(route, data, method="PATCH", headers=moderator, expected=200)
+                    error(route, 409, "STATUS_CONFLICT", data=data, method="PATCH", headers=moderator)
+                error(f"/submitData/{current_id}", 409, "PEREVAL_NOT_EDITABLE", method="PATCH", data={"title": "Too late"})
+                history = json.loads(request(f"/submitData/{current_id}/history", expected=200)[1])
+                assert [(row["old_status"], row["new_status"]) for row in history] == [("new", "pending"), ("pending", final)]
+                assert all(row["actor"]["role"] == "moderator" and row["changed_at"].endswith("Z") for row in history)
+            print("TCP HTTP: author/other/moderator, 401/403/404/409/422, partial/null, both moderation branches: OK", flush=True)
+
             compose("up", "-d", "--force-recreate", "--wait", "--wait-timeout", "60", "postgres")
             status, body = wait_for(f"/submitData/{item_id}")
-            assert status == 200 and json.loads(body)["title"] == "Persistence test"
+            assert status == 200 and json.loads(body) == {**edited, "status": "accepted"}
             compose("run", "--rm", "migrate")
 
             logs = compose("logs", "--no-color").stdout
@@ -121,8 +179,12 @@ def main():
             compose("exec", "-T", "app", "python", "-c", "from importlib.util import find_spec; assert all(find_spec(name) is None for name in ['pytest', 'httpx', 'piptools'])")
             print("Persistence after PostgreSQL container recreation, safe logs and runtime files: OK", flush=True)
         finally:
-            compose("down")
-            print(f"Stopped only {project}. Its new test volume is preserved: {volume}", flush=True)
+            compose("down", *(["--volumes"] if args.remove_volume else []))
+            if args.remove_volume:
+                assert run(["docker", "volume", "inspect", volume], check=False).returncode != 0
+                print(f"Removed only {project} and its new test volume", flush=True)
+            else:
+                print(f"Stopped only {project}. Its new test volume is preserved: {volume}", flush=True)
 
 
 if __name__ == "__main__":

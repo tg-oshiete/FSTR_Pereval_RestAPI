@@ -5,7 +5,7 @@ from sqlalchemy import inspect, text
 from sqlalchemy.exc import IntegrityError, DataError
 from sqlalchemy.orm import Session
 
-from app.models import Image, PerevalAdded, PerevalImages, User
+from app.models import PerevalAdded, PerevalImages, User
 from tests.test_regressions import photo
 
 

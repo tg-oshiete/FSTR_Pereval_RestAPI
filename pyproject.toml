@@ -1,0 +1,20 @@
+[tool.ruff]
+target-version = "py313"
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F"]
+
+[tool.ruff.lint.per-file-ignores]
+# Standalone diagnostic script adds the checkout root before importing app.
+"scripts/check_postgres.py" = ["E402"]
+
+[tool.coverage.run]
+source = ["app"]
+branch = true
+
+[tool.coverage.report]
+show_missing = true
+
+[tool.coverage.xml]
+output = "reports/coverage.xml"

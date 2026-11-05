@@ -17,6 +17,13 @@ from app.validation import DEFAULT_LIMITS
 from tests.auth_helpers import provision
 
 
+def pytest_addoption(parser):
+    parser.addoption(
+        "--postgres-service-container",
+        help="Explicit disposable postgres:18-alpine service container ID (label fstr.qa.disposable=true)",
+    )
+
+
 @pytest.fixture
 def test_settings():
     # Explicit values ignore the user's .env and FSTR_* environment variables.

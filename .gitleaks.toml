@@ -1,0 +1,15 @@
+title = "FSTR: standard secret rules and database password assignments"
+
+[extend]
+useDefault = true
+
+[[rules]]
+id = "fstr-database-password"
+description = "Literal FSTR/PostgreSQL password, including low entropy passwords"
+regex = '''(?im)^\s*(?:FSTR_DB_PASS|POSTGRES_PASSWORD)\s*[:=]\s*['"]?([^$\s'"}{#][^\s'"}{#]*)'''
+secretGroup = 1
+
+[[rules.allowlists]]
+description = "Exact public documentation placeholder; never a usable credential"
+regexTarget = "secret"
+regexes = ['''^replace-with-a-local-password$''']

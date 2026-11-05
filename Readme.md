@@ -43,3 +43,9 @@ python -m pytest -m integration tests/integration
 --role author --fam Test --name Author --ttl-hours 1` (одна строка).
 Отзыв: `python -m app.cli revoke --token-id <id>`. Не публикуйте выданный секрет.
 Схема обновляется `alembic upgrade head`, включая доступ и историю решений.
+
+## Проверки CI
+
+Workflow запускает Ruff, быстрые и PostgreSQL-тесты, контейнерный smoke,
+Gitleaks и pip-audit. [Аудит зависимостей](docs/DEPENDENCIES.md) содержит открытый
+QA-01; проверка безопасности не отключена. Удалённый CI не подтверждён.

@@ -1,0 +1,146 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHON_VERSION: "3.13.9"
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+  PYTHONDONTWRITEBYTECODE: "1"
+
+jobs:
+  fast:
+    name: Ruff and fast HTTP tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Clean dev installation
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends build-essential libpq-dev
+          python -m venv .venv
+          echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
+          .venv/bin/python -m pip install -r requirements.txt -r requirements-dev.txt
+          .venv/bin/python -m pip check
+      - run: python -m ruff check .
+      - name: Fast suite with auxiliary branch coverage
+        run: python -m pytest -m "not integration" --cov=app --cov-branch --cov-report=term-missing --cov-report=xml:reports/coverage-fast.xml --junitxml=reports/fast.xml
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: fast-test-reports
+          path: reports/
+          if-no-files-found: warn
+
+  postgres:
+    name: PostgreSQL 18 migrations and integration HTTP
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_USER: integration
+          POSTGRES_DB: postgres
+          # Disposable Actions service only; never a repository/user secret.
+          POSTGRES_PASSWORD: ${{ format('ci-only-{0}-{1}', github.run_id, github.run_attempt) }}
+        ports:
+          - 5432/tcp
+        options: >-
+          --label fstr.qa.disposable=true
+          --health-cmd "pg_isready -h 127.0.0.1 -U integration -d postgres"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 30
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Clean dev installation
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends build-essential libpq-dev
+          python -m venv .venv
+          echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
+          .venv/bin/python -m pip install -r requirements.txt -r requirements-dev.txt
+          .venv/bin/python -m pip check
+      - name: Fresh databases, migrations, rollback and concurrent network HTTP
+        env:
+          PG_SERVICE_CONTAINER: ${{ job.services.postgres.id }}
+        run: python -m pytest -m integration tests/integration --postgres-service-container "$PG_SERVICE_CONTAINER" --cov=app --cov-branch --cov-report=term-missing --cov-report=xml:reports/coverage-postgres.xml --junitxml=reports/postgres.xml
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: postgres-test-reports
+          path: reports/
+          if-no-files-found: warn
+
+  docker:
+    name: Docker build, migrations and TCP smoke
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: New project and volume; no user .env; remove own test volume
+        run: python scripts/check_compose.py --remove-volume
+
+  dependencies:
+    name: Known dependency vulnerabilities
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Install locked audit tooling in a new environment
+        run: |
+          python -m venv .venv
+          echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
+          .venv/bin/python -m pip install -r requirements-dev.txt
+          mkdir -p reports
+      - name: Audit complete runtime and development locks (fail on findings)
+        run: python -m pip_audit --disable-pip --no-deps -r requirements.txt -r requirements-dev.txt --format json --output reports/pip-audit.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: dependency-audit
+          path: reports/pip-audit.json
+          if-no-files-found: warn
+
+  secrets:
+    name: No new secrets
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Detector canary, current files and full history
+        run: python scripts/check_secrets.py
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: redacted-secret-audit
+          path: reports/gitleaks-*.json
+          if-no-files-found: warn
